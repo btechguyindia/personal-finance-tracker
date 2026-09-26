@@ -3,6 +3,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import express from 'express';
+import { normalizeImportRow } from './src/services/importNormalize.js';
 
 const isNeon = !!process.env.DATABASE_URL;
 let neonMod = null;
@@ -766,8 +767,12 @@ app.post('/api/import/preview', authMiddleware, async (req, res) => {
     db.transactions.filter((t) => t.userId === req.user.id).map(txFingerprint)
   );
   const seen = new Set();
-  const out = rows.map((r, i) => {
-    const errors = validateTransaction(r);
+  const out = rows.map((raw, i) => {
+    const norm = normalizeImportRow(raw || {});
+    const r = norm.row;
+    // Bank-side dead rows (failed/cancelled — no money moved) surface as
+    // clear skip reasons instead of cryptic validation errors.
+    const errors = norm.skipped ? [norm.reason] : validateTransaction(r);
     const cand = { ...r, amountPaise: Number.isFinite(Number(r.amount)) ? toPaise(r.amount) : NaN };
     const fp = errors.length ? null : txFingerprint(cand);
     const dupExisting = fp && existing.has(fp);
@@ -796,8 +801,11 @@ app.post('/api/import/confirm', authMiddleware, async (req, res) => {
   );
   let imported = 0, skipped = 0;
   const importedTxns = [];
-  for (const r of rows) {
-    if (!r || r.include === false) { skipped++; continue; }
+  for (const raw of rows) {
+    if (!raw || raw.include === false) { skipped++; continue; }
+    const norm = normalizeImportRow(raw);
+    if (norm.skipped) { skipped++; continue; }
+    const r = norm.row;
     if (validateTransaction(r).length) { skipped++; continue; }
     const cand = { ...r, amountPaise: toPaise(r.amount) };
     if (existing.has(txFingerprint(cand))) { skipped++; continue; }

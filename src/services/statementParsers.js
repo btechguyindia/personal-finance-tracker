@@ -131,13 +131,22 @@ function cleanMerchant(narration = '') {
   return s.slice(0, 80) || 'Bank transaction';
 }
 
+import { normalizeStatus, normalizeCategory, isBareAccountRef } from './importNormalize.js';
+
 export function autoDetectBank(text) {
-  const { header } = parseCSVTable(text);
+  const { header, rows } = parseCSVTable(text);
   const h = header.join(' ');
   if (h.includes('narration') && h.includes('value dat')) return 'hdfc';
   if (h.includes('transaction remarks') || (h.includes('withdrawal') && h.includes('deposit'))) return 'icici';
   if ((h.includes('description') || h.includes('narration')) && h.includes('ref') && h.includes('debit') && h.includes('credit')) return 'sbi';
   if (h.includes('transaction id') || (h.includes('note') && h.includes('amount'))) return 'upi';
+  // Debit/credit-style app exports (Date, Type=debit/credit, Amount,
+  // Category, Account, Status): detect from values, not just headers.
+  const iType = findCol(header, ['type']);
+  if (iType >= 0 && rows.length > 0) {
+    const vals = new Set(rows.slice(0, 8).map((r) => String(r[iType] || '').trim().toLowerCase()));
+    if (vals.has('debit') || vals.has('credit')) return 'upi';
+  }
   if (h.includes('date') && h.includes('amount') && h.includes('type')) return 'generic';
   return 'generic';
 }
@@ -200,24 +209,49 @@ export function parseICICI(text, account = 'ICICI Savings') {
 
 export function parseUPI(text, account = '') {
   const { header, rows } = parseCSVTable(text);
-  const iDate = findCol(header, ['date', 'time']);
+  const iDate = findCol(header, ['transaction date', 'txn date', 'value date', 'date', 'time']);
   const iNote = findCol(header, ['note', 'narration', 'description', 'remarks', 'payee', 'merchant']);
   const iAmt = findCol(header, ['amount', 'value']);
-  const iType = findCol(header, ['type', 'dr cr', 'direction', 'status']);
+  const iType = findCol(header, ['transaction type', 'type', 'dr cr', 'direction', 'dc']);
+  const iCat = findCol(header, ['category']);
+  const iAcct = findCol(header, ['account']);
+  const iStatus = findCol(header, ['transaction status', 'status']);
   return rows.map((c) => {
     const date = parseDate(c[iDate]);
     const amount = Math.abs(parseAmount(c[iAmt]));
     if (!date || !(amount > 0)) return null;
-    const typeHint = String(c[iType] || '').toLowerCase();
-    const type = /credit|received|cr|in/.test(typeHint) && !/debit|paid|dr|out/.test(typeHint) ? 'income' : 'expense';
-    const narration = c[iNote] || '';
+    // Bank-side dead rows (failed/cancelled) move no money — drop them.
+    if (iStatus >= 0) {
+      const st = normalizeStatus(c[iStatus]);
+      if (st && typeof st === 'object' && st.skip) return null;
+    }
+    const hint = String(c[iType] || '').trim().toLowerCase();
+    let type;
+    if (['debit', 'dr', 'paid', 'withdrawal', 'out', 'expense'].includes(hint)) type = 'expense';
+    else if (['credit', 'cr', 'received', 'deposit', 'in', 'income'].includes(hint)) type = 'income';
+    else type = /credit|received|deposit/.test(hint) && !/debit|paid|withdraw/.test(hint) ? 'income' : 'expense';
+    const fileCat = iCat >= 0 ? String(c[iCat] || '').trim() : '';
+    const narration = c[iNote] || fileCat || '';
+    // Respect the file's own category labels (mapped), fall back to guessing.
+    const lowerCat = fileCat.toLowerCase();
+    const mapped = normalizeCategory(fileCat, type);
+    const category = (fileCat && mapped !== 'Miscellaneous') || !narration
+      ? mapped
+      : (/^(upi payment|transfer|income|reversal)$/.test(lowerCat) ? mapped : guessCategory(narration, type));
+    if (type === 'income' && lowerCat === 'reversal') type = 'refund';
+    // A bare account number is a bank reference, not a FinTrack account.
+    let acct = account || (iAcct >= 0 ? c[iAcct] : '');
+    let extra = '';
+    if (isBareAccountRef(acct)) { extra = `Acct ${String(acct).trim()}`; acct = account || ''; }
+    const description = [String(c[iNote] || '').slice(0, 160), extra].filter(Boolean).join(' · ').slice(0, 200)
+      || `${fileCat || 'Bank transaction'}`;
     return {
       date, type, amount,
-      category: guessCategory(narration, type),
-      merchant: cleanMerchant(narration),
-      account,
-      description: String(narration).slice(0, 200),
-      upiRef: extractUpiRef(narration),
+      category,
+      merchant: cleanMerchant(c[iNote] || fileCat),
+      account: acct,
+      description,
+      upiRef: extractUpiRef(`${c[iNote] || ''}`),
       status: 'completed'
     };
   }).filter(Boolean);

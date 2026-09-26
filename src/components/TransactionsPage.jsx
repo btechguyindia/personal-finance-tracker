@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { CATEGORIES, SUBCATEGORIES, PAYMENT_METHODS } from '../services/analyticsService.js';
 import { formatINR } from '../services/finance.js';
 import { BANK_PRESETS, parseStatement } from '../services/statementParsers.js';
+import { normalizeImportRow } from '../services/importNormalize.js';
 import { api } from '../services/api.js';
 
 const TYPES = ['expense', 'income', 'transfer', 'refund', 'adjustment'];
@@ -178,7 +179,14 @@ export default function TransactionsPage({ transactions, accounts, onChanged, mo
         }
       } catch { /* fall through to generic */ }
     } else {
-      rows = rows.map((r) => ({ ...r, account: r.account || importAccount || r.account }));
+      // Generic FinTrack CSV — still normalize bank synonyms (debit/credit,
+      // SUCCESS/FAILED…) so the preview shows ledger-ready rows.
+      // Dead bank rows (failed/cancelled) are flagged by the server preview.
+      rows = rows.map((raw) => {
+        const norm = normalizeImportRow(raw);
+        const r = norm.row;
+        return { ...r, account: r.account || importAccount || (accounts[0] || {}).name || 'Cash Wallet' };
+      });
     }
     if (!rows.length) { setError('No data rows found in CSV.'); return; }
     try {
