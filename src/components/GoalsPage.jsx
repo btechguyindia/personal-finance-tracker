@@ -23,6 +23,10 @@ export default function GoalsPage({ goals, accounts, transactions, onChanged }) 
     e.preventDefault();
     setError(''); setBusy(true);
     try {
+      if (!contrib.goalId) throw new Error('Please select a goal first.');
+      if (!Number.isFinite(Number(contrib.amount)) || Number(contrib.amount) <= 0) {
+        throw new Error('Please enter a contribution amount greater than zero.');
+      }
       await api.contributeGoal(contrib.goalId, {
         amount: Number(contrib.amount), account: contrib.account || null,
         note: contrib.note, date: new Date().toISOString().slice(0, 10)

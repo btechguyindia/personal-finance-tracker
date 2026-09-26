@@ -359,13 +359,13 @@ export default function AnalyticsPage({ transactions = [], budgets: budgetsMap =
                 <label>to <input type="date" value={cmpEnd} onChange={(e) => setCmpEnd(e.target.value)} /></label>
               </div>
             )}
-            <table>
+            <div className="table-wrap"><table>
               <thead><tr><th>Metric</th><th>Current ({range.start}→{range.end})</th><th>Previous ({comparison.prevRange.start}→{comparison.prevRange.end})</th><th>Δ (₹)</th><th>Δ (%)</th></tr></thead>
               <tbody>
                 <tr><td>Spending</td><td>{formatINR(comparison.result.current.totalSpending)}</td><td>{formatINR(comparison.result.previous.totalSpending)}</td><td>{formatINR(comparison.result.spendingDiff)}</td><td>{comparison.result.spendingPct === null ? 'n/a (prev = 0)' : formatPct(comparison.result.spendingPct)}</td></tr>
                 <tr><td>Income</td><td>{formatINR(comparison.result.current.totalIncome)}</td><td>{formatINR(comparison.result.previous.totalIncome)}</td><td>{formatINR(comparison.result.incomeDiff)}</td><td>{comparison.result.incomePct === null ? 'n/a (prev = 0)' : formatPct(comparison.result.incomePct)}</td></tr>
               </tbody>
-            </table>
+            </table></div>
           </div>
 
           {/* 8. Behaviour insights (§6) */}

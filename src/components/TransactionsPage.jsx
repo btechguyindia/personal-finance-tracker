@@ -208,7 +208,7 @@ export default function TransactionsPage({ transactions, accounts, onChanged, mo
         <div className="card-head">
           <h3>Ledger ({filtered.length} of {transactions.length})</h3>
           <div className="row">
-            <input className="input" placeholder="🔍 Search merchant, category, UPI ref…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search transactions" style={{ minWidth: 220 }} />
+            <input className="input" placeholder="🔍 Search merchant, category, UPI ref…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search transactions" style={{ minWidth: 'min(220px, 100%)' }} />
             <select value={fType} onChange={(e) => setFType(e.target.value)}><option value="">All types</option>{TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
             <select value={fAccount} onChange={(e) => setFAccount(e.target.value)}><option value="">All accounts</option>{accounts.map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}</select>
             <select value={fStatus} onChange={(e) => setFStatus(e.target.value)}><option value="">Any status</option>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</select>
@@ -310,9 +310,9 @@ export default function TransactionsPage({ transactions, accounts, onChanged, mo
               <label>Merchant<input className="input" value={form.merchant} onChange={(e) => set('merchant', e.target.value)} placeholder="e.g. BigBasket" /></label>
               <label>UPI ref (optional)<input className="input" value={form.upiRef} onChange={(e) => set('upiRef', e.target.value)} placeholder="e.g. 4177XXXXXX" /></label>
               <label>Tags (comma separated)<input className="input" value={form.tags} onChange={(e) => set('tags', e.target.value)} placeholder="e.g. trip, office" /></label>
-              <label className="span-3" style={{ gridColumn: 'span 3' }}>Note<input className="input" value={form.description} onChange={(e) => set('description', e.target.value)} placeholder="Optional" /></label>
-              {error && <div className="error span-3" style={{ gridColumn: 'span 3' }}>{error}</div>}
-              <div className="row span-3" style={{ gridColumn: 'span 3' }}>
+              <label className="span-3">Note<input className="input" value={form.description} onChange={(e) => set('description', e.target.value)} placeholder="Optional" /></label>
+              {error && <div className="error span-3">{error}</div>}
+              <div className="row span-3">
                 <button className="btn primary" type="submit" disabled={busy}>{busy ? 'Saving…' : editingId ? 'Save changes' : 'Add transaction'}</button>
                 <button className="btn" type="button" onClick={() => setShowModal(false)}>Cancel</button>
               </div>

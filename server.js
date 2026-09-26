@@ -56,7 +56,9 @@ function emptyDb() {
   return {
     users: [], sessions: [], transactions: [], budgets: [],
     accounts: [], categories: [], upiIds: [], goals: [], contributions: [],
-    recurring: [], preferences: [], imports: [], audit: []
+    recurring: [], preferences: [], imports: [], resets: [],
+    autopilotRules: [], autopilotRuns: [], notifications: [],
+    securityEvents: [], audit: []
   };
 }
 
@@ -89,6 +91,7 @@ function loadDb() {
   for (const a of db.accounts || []) {
     if (a.openingPaise === undefined) { a.openingPaise = toPaise(a.openingBalance || 0); delete a.openingBalance; }
   }
+  migrateSessions(db);
   return db;
 }
 
@@ -106,6 +109,7 @@ async function refreshDbFromNeon() {
     const remote = await neonMod.loadFromNeon(emptyDb);
     db = { ...emptyDb(), ...remote };
     for (const k of Object.keys(emptyDb())) if (!Array.isArray(db[k])) db[k] = [];
+    migrateSessions(db);
   } catch (e) {
     console.error('Neon load failed, using in-memory db:', e?.message || e);
   }
@@ -122,6 +126,85 @@ const save = async () => {
   try { saveDb(db); } catch { /* ephemeral fs on serverless — ignore */ }
 };
 const uid = (p) => p + crypto.randomBytes(8).toString('hex');
+
+import { SECURITY_EVENT_CAP, capList, coarseDevice } from './src/services/security.js';
+
+// ── Sessions: hashed verifiers, independently revocable ────
+// The DB never stores raw bearer tokens — only SHA-256(token). Legacy rows
+// ({token}) are migrated losslessly on load (the raw value is right there to
+// hash) and the raw copy is then dropped.
+function hashToken(token) { return crypto.createHash('sha256').update(String(token)).digest('hex'); }
+const SESSION_TTL_MS = 7 * 24 * 3600 * 1000; // 7 days, unchanged policy
+const LAST_SEEN_TTL_MS = 3600 * 1000; // persist last-activity at most hourly
+
+function migrateSessions(dbRef) {
+  let changed = false;
+  for (const s of dbRef.sessions || []) {
+    if (!s.tokenHash && s.token) {
+      s.tokenHash = hashToken(s.token);
+      changed = true;
+    }
+    if (s.token) { delete s.token; changed = true; }
+    // Deterministic id from the verifier (no uid() here — migrateSessions
+    // runs during loadDb, before later consts initialize).
+    if (!s.id) { s.id = 's_' + (s.tokenHash ? hashToken(s.tokenHash).slice(0, 16) : crypto.randomBytes(8).toString('hex')); changed = true; }
+    if (!s.device) { s.device = 'Unknown device · before tracking'; changed = true; }
+    if (!s.lastSeenAt) { s.lastSeenAt = s.createdAt || null; changed = true; }
+  }
+  return changed;
+}
+
+function createSessionRecord(userId, deviceLabel) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const now = new Date();
+  const record = {
+    id: uid('s_'), userId, tokenHash: hashToken(token),
+    device: String(deviceLabel || 'Unknown device').slice(0, 80),
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + SESSION_TTL_MS).toISOString(),
+    lastSeenAt: now.toISOString()
+  };
+  return { record, token };
+}
+
+// Finds a live session for a raw bearer token. Upgrades a legacy raw-token
+// row on sight (rolling-transition safety) and reports whether it did.
+function findSessionByToken(bearer) {
+  if (!bearer) return { session: null, upgraded: false };
+  let upgraded = false;
+  let session = db.sessions.find((s) => s.tokenHash === hashToken(bearer));
+  if (!session) {
+    const legacy = db.sessions.find((s) => s.token === bearer);
+    if (legacy) {
+      legacy.tokenHash = hashToken(bearer);
+      delete legacy.token;
+      if (!legacy.id) legacy.id = uid('s_');
+      session = legacy;
+      upgraded = true;
+    }
+  }
+  if (!session || Date.parse(session.expiresAt) <= Date.now()) return { session: null, upgraded };
+  return { session, upgraded };
+}
+
+function secEvent(userId, kind, detail) {
+  db.securityEvents.push({
+    id: uid('se_'), userId, kind,
+    detail: String(detail || '').slice(0, 200),
+    at: new Date().toISOString()
+  });
+  const mine = db.securityEvents.filter((e) => e.userId === userId);
+  if (mine.length > SECURITY_EVENT_CAP) {
+    const drop = new Set(mine.slice(0, mine.length - SECURITY_EVENT_CAP).map((e) => e.id));
+    db.securityEvents = db.securityEvents.filter((e) => !drop.has(e.id));
+  }
+}
+
+// Public session shape — never includes tokenHash or raw tokens.
+const publicSession = (s, currentId) => ({
+  id: s.id, current: s.id === currentId, device: s.device || 'Unknown device',
+  createdAt: s.createdAt, expiresAt: s.expiresAt, lastSeenAt: s.lastSeenAt || null
+});
 
 function audit(userId, action, entity, entityId, detail) {
   db.audit.push({
@@ -215,13 +298,20 @@ function authMiddleware(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
-  const session = db.sessions.find((s) => s.token === token);
-  if (!session || Date.parse(session.expiresAt) <= Date.now()) {
+  const { session, upgraded } = findSessionByToken(token);
+  if (!session) {
     return res.status(401).json({ error: 'Session expired — please log in again' });
   }
   const user = db.users.find((u) => u.id === session.userId);
   if (!user) return res.status(401).json({ error: 'User not found' });
   req.user = user;
+  req.sessionId = session.id;
+  // Throttled last-activity persistence: at most one extra write per hour,
+  // so normal traffic doesn't pay a Neon round-trip per request.
+  if (upgraded || !session.lastSeenAt || Date.now() - Date.parse(session.lastSeenAt) > LAST_SEEN_TTL_MS) {
+    session.lastSeenAt = new Date().toISOString();
+    await save();
+  }
   next();
   })().catch((e) => {
     console.error('auth error:', e?.message || e);
@@ -239,7 +329,7 @@ function loginRateLimited(key) {
   return arr.length > 10;
 }
 
-const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name });
+const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name, avatar: u.avatar || null });
 
 // ── Ledger: balances derived from opening + ledger entries ────────────
 // Asset account: opening + received − paid (completed only).
@@ -378,11 +468,10 @@ app.post('/api/auth/signup', async (req, res) => {
   const cleanName = String(name || '').trim().slice(0, 80) || cleanEmail.split('@')[0];
   const user = createUser(cleanEmail, String(password), cleanName);
   ensureUserDefaults(user);
-  const token = crypto.randomBytes(32).toString('hex');
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + 7 * 24 * 3600 * 1000).toISOString();
-  db.sessions.push({ token, userId: user.id, createdAt: now.toISOString(), expiresAt });
+  const { record, token } = createSessionRecord(user.id, coarseDevice(req.headers['user-agent']));
+  db.sessions.push(record);
   audit(user.id, 'signup', 'user', user.id, cleanEmail);
+  secEvent(user.id, 'login', 'New account sign-up');
   await save();
   res.status(201).json({ token, user: publicUser(user) });
 });
@@ -396,21 +485,22 @@ app.post('/api/auth/login', async (req, res) => {
   }
   const user = db.users.find((u) => u.email === String(email).toLowerCase().trim());
   if (!user || !verifyPassword(user, String(password))) {
+    // Failed sign-in is recorded against a known account only — and never
+    // with the attempted password. Unknown emails are not logged (no owner).
+    if (user) { secEvent(user.id, 'login_failed', 'Failed sign-in attempt'); await save(); }
     return res.status(401).json({ error: 'Invalid email or password' });
   }
-  const token = crypto.randomBytes(32).toString('hex');
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + 7 * 24 * 3600 * 1000).toISOString();
-  db.sessions.push({ token, userId: user.id, createdAt: now.toISOString(), expiresAt });
+  const { record, token } = createSessionRecord(user.id, coarseDevice(req.headers['user-agent']));
+  db.sessions.push(record);
   audit(user.id, 'login', 'session', null, '');
+  secEvent(user.id, 'login', `Signed in (${record.device})`);
   await save();
   res.json({ token, user: publicUser(user) });
 });
 
 app.post('/api/auth/logout', authMiddleware, async (req, res) => {
-  const header = req.headers.authorization || '';
-  const token = header.slice(7);
-  db.sessions = db.sessions.filter((s) => s.token !== token);
+  db.sessions = db.sessions.filter((s) => !(s.userId === req.user.id && s.id === req.sessionId));
+  secEvent(req.user.id, 'logout', 'Signed out');
   await save();
   res.json({ ok: true });
 });
@@ -429,7 +519,192 @@ app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
   }
   req.user.salt = crypto.randomBytes(16).toString('hex');
   req.user.hash = hashPassword(String(next), req.user.salt);
+  req.user.passwordUpdatedAt = new Date().toISOString();
+  // All other devices are signed out; the current session stays valid so the
+  // user is not unexpectedly logged out mid-flow.
+  const before = db.sessions.length;
+  db.sessions = db.sessions.filter((s) => !(s.userId === req.user.id && s.id !== req.sessionId));
+  const revoked = before - db.sessions.length;
   audit(req.user.id, 'change_password', 'user', req.user.id, '');
+  secEvent(req.user.id, 'password_changed',
+    revoked > 0 ? `Password changed; ${revoked} other session(s) signed out` : 'Password changed');
+  await save();
+  res.json({ ok: true, otherSessionsRevoked: revoked });
+});
+
+// ── Profile API (display name + avatar) ──
+const AVATAR_EMOJI = new Set(['😀', '😎', '🦊', '🐼', '🦁', '🐸', '🦄', '🐝', '🌟', '⚡', '💎', '🚀', '🌈', '🍀', '🔥', '💰']);
+const AVATAR_COLORS = new Set(['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444', '#14b8a6', '#6366f1']);
+
+app.put('/api/auth/profile', authMiddleware, async (req, res) => {
+  const { name, avatar } = req.body || {};
+  if (name !== undefined) {
+    const clean = String(name).trim().slice(0, 80);
+    if (!clean) return res.status(400).json({ error: 'Display name cannot be empty' });
+    req.user.name = clean;
+  }
+  if (avatar !== undefined) {
+    if (avatar !== null) {
+      if (typeof avatar !== 'object') return res.status(400).json({ error: 'Invalid avatar' });
+      const { emoji, color } = avatar;
+      if (!AVATAR_EMOJI.has(emoji)) return res.status(400).json({ error: 'Invalid avatar emoji' });
+      if (!AVATAR_COLORS.has(color)) return res.status(400).json({ error: 'Invalid avatar color' });
+      req.user.avatar = { emoji, color };
+    } else {
+      req.user.avatar = null;
+    }
+  }
+  audit(req.user.id, 'update_profile', 'user', req.user.id, '');
+  await save();
+  res.json({ user: publicUser(req.user) });
+});
+
+// ── Forgot / reset password (self-hosted: code returned in-API) ──
+// No email service is configured, so the 6-digit reset code is returned by
+// the forgot-password call and shown in the UI. Codes expire after 15
+// minutes, are single-use, and lock after 5 wrong attempts.
+const RESET_TTL_MS = 15 * 60 * 1000;
+const RESET_MAX_ATTEMPTS = 5;
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  if (isNeon) await refreshDbFromNeon();
+  const cleanEmail = String(req.body?.email || '').toLowerCase().trim();
+  if (!cleanEmail) return res.status(400).json({ error: 'Email address is required' });
+  if (loginRateLimited(`${req.ip}:forgot:${cleanEmail}`)) {
+    return res.status(429).json({ error: 'Too many attempts — try again in a few minutes' });
+  }
+  const user = db.users.find((u) => u.email === cleanEmail);
+  if (!user) return res.status(404).json({ error: 'No account found with this email' });
+  // Invalidate older unused codes for this user.
+  db.resets = (db.resets || []).filter((x) => x.userId !== user.id || x.usedAt);
+  const code = String(crypto.randomInt(100000, 1000000));
+  db.resets.push({
+    id: uid('pr_'), userId: user.id,
+    codeHash: crypto.createHash('sha256').update(code).digest('hex'),
+    attempts: 0, createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + RESET_TTL_MS).toISOString(),
+    usedAt: null
+  });
+  audit(user.id, 'forgot_password', 'user', user.id, '');
+  await save();
+  res.json({ ok: true, resetCode: code, expiresInMinutes: 15 });
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  if (isNeon) await refreshDbFromNeon();
+  const cleanEmail = String(req.body?.email || '').toLowerCase().trim();
+  const code = String(req.body?.code || '').trim();
+  const next = req.body?.newPassword;
+  if (!cleanEmail || !code) return res.status(400).json({ error: 'Email and reset code are required' });
+  if (!next || String(next).length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters' });
+  }
+  const user = db.users.find((u) => u.email === cleanEmail);
+  if (!user) return res.status(404).json({ error: 'No account found with this email' });
+  const now = Date.now();
+  const rec = (db.resets || [])
+    .filter((x) => x.userId === user.id && !x.usedAt && Date.parse(x.expiresAt) > now)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+  if (!rec) return res.status(400).json({ error: 'No active reset code — please request a new one' });
+  if (rec.attempts >= RESET_MAX_ATTEMPTS) {
+    return res.status(429).json({ error: 'Too many wrong attempts — please request a new code' });
+  }
+  let match = false;
+  try {
+    const a = Buffer.from(crypto.createHash('sha256').update(code).digest('hex'), 'hex');
+    const b = Buffer.from(rec.codeHash, 'hex');
+    match = a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch { match = false; }
+  if (!match) {
+    rec.attempts += 1;
+    await save();
+    return res.status(401).json({ error: `Incorrect code (${RESET_MAX_ATTEMPTS - rec.attempts} attempts left)` });
+  }
+  rec.usedAt = new Date().toISOString();
+  user.salt = crypto.randomBytes(16).toString('hex');
+  user.hash = hashPassword(String(next), user.salt);
+  user.passwordUpdatedAt = new Date().toISOString();
+  // Log out everywhere — the password changed, so all sessions die.
+  db.sessions = db.sessions.filter((s) => s.userId !== user.id);
+  audit(user.id, 'reset_password', 'user', user.id, '');
+  secEvent(user.id, 'password_reset', 'Password reset via code; all sessions signed out');
+  await save();
+  res.json({ ok: true });
+});
+
+// ── Security & Privacy Control Room ──
+app.get('/api/security/sessions', authMiddleware, async (req, res) => {
+  const rows = db.sessions.filter((s) => s.userId === req.user.id)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .map((s) => publicSession(s, req.sessionId));
+  res.json({ sessions: rows });
+});
+
+app.post('/api/security/sessions/:id/revoke', authMiddleware, async (req, res) => {
+  const s = db.sessions.find((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (!s) return res.status(404).json({ error: 'Session not found' });
+  const wasCurrent = s.id === req.sessionId;
+  db.sessions = db.sessions.filter((x) => x.id !== s.id);
+  secEvent(req.user.id, 'session_revoked', wasCurrent ? 'Current session revoked' : 'A session was revoked');
+  await save();
+  res.json({ ok: true, revokedCurrent: wasCurrent });
+});
+
+app.post('/api/security/sessions/revoke-others', authMiddleware, async (req, res) => {
+  const before = db.sessions.filter((s) => s.userId === req.user.id).length;
+  db.sessions = db.sessions.filter((s) => !(s.userId === req.user.id && s.id !== req.sessionId));
+  const revoked = before - db.sessions.filter((s) => s.userId === req.user.id).length;
+  secEvent(req.user.id, 'sessions_revoked_others', `${revoked} other session(s) signed out`);
+  await save();
+  res.json({ ok: true, revoked });
+});
+
+app.get('/api/security/events', authMiddleware, async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const rows = db.securityEvents.filter((e) => e.userId === req.user.id)
+    .sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, limit);
+  res.json({ events: rows });
+});
+
+app.get('/api/security/overview', authMiddleware, async (req, res) => {
+  const sessions = db.sessions.filter((s) => s.userId === req.user.id);
+  const current = sessions.find((s) => s.id === req.sessionId) || null;
+  const events = db.securityEvents.filter((e) => e.userId === req.user.id)
+    .sort((a, b) => (a.at < b.at ? 1 : -1));
+  const logins = events.filter((e) => e.kind === 'login');
+  res.json({
+    sessions: sessions.length,
+    currentSession: current ? publicSession(current, req.sessionId) : null,
+    lastLoginAt: logins.length ? logins[0].at : null,
+    passwordUpdatedAt: req.user.passwordUpdatedAt || null,
+    recentEvents: events.slice(0, 5)
+  });
+});
+
+app.post('/api/security/delete-account', authMiddleware, async (req, res) => {
+  const { password, confirmation } = req.body || {};
+  if (loginRateLimited(`${req.ip}:delete:${req.user.id}`)) {
+    return res.status(429).json({ error: 'Too many attempts — try again in a few minutes' });
+  }
+  if (!password || !verifyPassword(req.user, String(password))) {
+    secEvent(req.user.id, 'deletion_failed', 'Deletion attempted with wrong password');
+    await save();
+    return res.status(401).json({ error: 'Password is incorrect' });
+  }
+  if (confirmation !== 'DELETE MY ACCOUNT') {
+    secEvent(req.user.id, 'deletion_failed', 'Deletion attempted without the confirmation phrase');
+    await save();
+    return res.status(400).json({ error: 'Type DELETE MY ACCOUNT to confirm' });
+  }
+  const id = req.user.id;
+  // Delete every owned row across all collections (users handled by id).
+  // securityEvents included: deletion is total, no tombstone remains.
+  // No external files exist in this phase — nothing else to remove.
+  for (const k of Object.keys(emptyDb())) {
+    if (k === 'users') continue;
+    db[k] = db[k].filter((x) => x && x.userId !== id);
+  }
+  db.users = db.users.filter((u) => u.id !== id);
   await save();
   res.json({ ok: true });
 });
@@ -450,6 +725,11 @@ app.post('/api/transactions', authMiddleware, async (req, res) => {
   db.transactions.push(tx);
   audit(req.user.id, 'create', 'transaction', tx.id, `${tx.type} ${tx.date} ${toRupees(tx.amountPaise)}`);
   await save();
+  // Autopilot never blocks the write — failures are swallowed after logging.
+  try {
+    await evaluateTransactionTriggers(req.user.id, toClientTx(tx));
+    await evaluateBudgetTrigger(req.user.id, tx.date.slice(0, 7));
+  } catch (e) { console.error('autopilot hook failed:', e?.message || e); }
   res.status(201).json({ transaction: toClientTx(tx) });
 });
 
@@ -515,6 +795,7 @@ app.post('/api/import/confirm', authMiddleware, async (req, res) => {
     db.transactions.filter((t) => t.userId === req.user.id).map(txFingerprint)
   );
   let imported = 0, skipped = 0;
+  const importedTxns = [];
   for (const r of rows) {
     if (!r || r.include === false) { skipped++; continue; }
     if (validateTransaction(r).length) { skipped++; continue; }
@@ -523,11 +804,16 @@ app.post('/api/import/confirm', authMiddleware, async (req, res) => {
     const tx = { ...buildTx(req.user.id, { ...r, source: 'imported' }) };
     db.transactions.push(tx);
     existing.add(txFingerprint({ ...cand }));
+    if (importedTxns.length < 100) importedTxns.push(toClientTx(tx));
     imported++;
   }
   if (key) db.imports.push({ key, userId: req.user.id, createdAt: new Date().toISOString(), rowCount: imported });
   audit(req.user.id, 'import', 'transactions', null, `imported=${imported} skipped=${skipped}`);
   await save();
+  try {
+    for (const t of importedTxns) await evaluateTransactionTriggers(req.user.id, t);
+    if (importedTxns.length) await evaluateBudgetTrigger(req.user.id, importedTxns[0].date.slice(0, 7));
+  } catch (e) { console.error('autopilot hook failed:', e?.message || e); }
   res.json({ ok: true, imported, skipped });
 });
 
@@ -1043,6 +1329,311 @@ app.delete('/api/recurring/:id', authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Financial Autopilot (rule engine + notifications) ──
+// Rules never move real money: the only ledger write is a `scheduled` draft
+// (or a pending-approval item the user explicitly approves). Runs are
+// idempotent per (rule, trigger, entity) and only fired runs are logged.
+import {
+  validateRule, matchConditions, detectSalary,
+  isUnusualAmount, budgetBreaches, monthSummary, previousMonthPrefix,
+  idempotencyKey
+} from './src/services/autopilotEngine.js';
+
+const RUNS_CAP = 500;
+const NOTIF_CAP = 200;
+
+function logAutopilotRun(userId, ruleId, trigger, key, decision, detail) {
+  db.autopilotRuns.push({
+    id: uid('aru_'), userId, ruleId, trigger, key,
+    decision, detail: String(detail || '').slice(0, 300),
+    at: new Date().toISOString()
+  });
+  const mine = db.autopilotRuns.filter((r) => r.userId === userId);
+  if (mine.length > RUNS_CAP) {
+    const drop = new Set(mine.slice(0, mine.length - RUNS_CAP).map((r) => r.id));
+    db.autopilotRuns = db.autopilotRuns.filter((r) => !drop.has(r.id));
+  }
+}
+
+function pushNotification(userId, n) {
+  const row = {
+    id: uid('nt_'), userId, kind: n.kind || 'info',
+    title: String(n.title || '').slice(0, 120),
+    body: String(n.body || '').slice(0, 1000),
+    payload: n.payload || null, ruleId: n.ruleId || null,
+    status: 'unread', createdAt: new Date().toISOString()
+  };
+  db.notifications.push(row);
+  const mine = db.notifications.filter((x) => x.userId === userId);
+  if (mine.length > NOTIF_CAP) {
+    const drop = new Set(mine.slice(0, mine.length - NOTIF_CAP).map((x) => x.id));
+    db.notifications = db.notifications.filter((x) => !drop.has(x.id));
+  }
+  return row;
+}
+
+// Execute a fired rule's actions. Returns counts. Never throws.
+function executeAutopilotActions(userId, rule, context) {
+  let notified = 0, drafts = 0, pending = 0;
+  for (const a of rule.actions || []) {
+    try {
+      if (a.kind === 'notify' || a.kind === 'suggest') {
+        pushNotification(userId, {
+          kind: a.kind === 'suggest' ? 'suggestion' : 'info',
+          title: rule.name, body: a.message, ruleId: rule.id,
+          payload: a.kind === 'suggest' && a.category ? { suggestedCategory: a.category } : null
+        });
+        notified++;
+      } else if (a.kind === 'create_draft') {
+        const draft = {
+          date: todayISO(), type: a.txType,
+          amount: context.amount,
+          category: a.category, account: a.account,
+          merchant: (a.merchant || `Autopilot: ${rule.name}`).slice(0, 120),
+          description: (a.note || `Draft prepared by autopilot rule "${rule.name}"`).slice(0, 300),
+          status: 'scheduled', source: 'autopilot', tags: ['autopilot']
+        };
+        if (rule.requireApproval !== false) {
+          pushNotification(userId, {
+            kind: 'approval', title: `Approve draft: ${rule.name}`,
+            body: `${a.txType === 'income' ? '+' : '−'}₹${draft.amount} · ${draft.category} · ${draft.account}. Approve to add as a scheduled draft (never moves money by itself).`,
+            ruleId: rule.id, payload: { draft }
+          });
+          pending++;
+        } else {
+          db.transactions.push(buildTx(userId, draft));
+          pushNotification(userId, {
+            kind: 'info', title: `Draft created: ${rule.name}`, ruleId: rule.id,
+            body: `Scheduled ${draft.type} of ₹${draft.amount} (${draft.category}) saved as a draft. Review or delete it in Transactions.`
+          });
+          drafts++;
+        }
+      }
+    } catch (e) {
+      logAutopilotRun(userId, rule.id, rule.trigger,
+        idempotencyKey(rule.id, rule.trigger, context.ref || 'action'),
+        'error', e?.message || 'action failed');
+    }
+  }
+  return { notified, drafts, pending };
+}
+
+function fireAutopilotRule(userId, rule, ref, context, detail) {
+  const key = idempotencyKey(rule.id, rule.trigger, ref);
+  if (db.autopilotRuns.some((r) => r.userId === userId && r.key === key)) {
+    return { fired: false, reason: 'idempotent replay skipped' };
+  }
+  const out = executeAutopilotActions(userId, rule, { ...context, ref });
+  rule.runCount = (rule.runCount || 0) + 1;
+  rule.lastRunAt = new Date().toISOString();
+  logAutopilotRun(userId, rule.id, rule.trigger, key, 'fired',
+    `${detail} → notify=${out.notified} drafts=${out.drafts} pending=${out.pending}`);
+  return { fired: true, ...out };
+}
+
+// Trigger group 1 — evaluated automatically on every created transaction.
+async function evaluateTransactionTriggers(userId, clientTxn) {
+  const rules = db.autopilotRules.filter((r) => r.userId === userId && r.status === 'active' &&
+    ['transaction_added', 'salary_detected', 'unusual_transaction'].includes(r.trigger));
+  if (!rules.length) return { evaluated: 0, fired: 0 };
+  let history = null;
+  const needHistory = rules.some((r) => r.trigger === 'unusual_transaction');
+  if (needHistory) {
+    const cutoff = addDaysISO(todayISO(), -90);
+    history = db.transactions
+      .filter((t) => t.userId === userId && t.type === 'expense' &&
+        (!t.status || t.status === 'completed') && t.date >= cutoff)
+      .map((t) => toRupees(t.amountPaise || 0));
+  }
+  let evaluated = 0, fired = 0;
+  for (const rule of rules) {
+    evaluated++;
+    if (rule.trigger === 'salary_detected' && !detectSalary(clientTxn)) continue;
+    if (rule.trigger === 'unusual_transaction') {
+      const chk = isUnusualAmount(clientTxn.amount, history);
+      if (!chk.unusual) continue;
+      if (!matchConditions(clientTxn, rule.conditions)) continue;
+      if (fireAutopilotRule(userId, rule, clientTxn.id, clientTxn, `unusual: ${chk.reason}`).fired) fired++;
+      continue;
+    }
+    if (!matchConditions(clientTxn, rule.conditions)) continue;
+    const detail = rule.trigger === 'salary_detected'
+      ? `salary detected: ${clientTxn.merchant || clientTxn.category} ₹${clientTxn.amount}`
+      : `txn ${clientTxn.id} matched ${rule.conditions.length} condition(s)`;
+    if (fireAutopilotRule(userId, rule, clientTxn.id, clientTxn, detail).fired) fired++;
+  }
+  if (fired > 0 || evaluated > 0) await save();
+  return { evaluated, fired };
+}
+
+// Trigger group 2 — on demand (budgets move too often for GET side effects).
+async function evaluateBudgetTrigger(userId, monthPrefix) {
+  const rules = db.autopilotRules.filter((r) => r.userId === userId && r.status === 'active' &&
+    r.trigger === 'budget_threshold');
+  let evaluated = 0, fired = 0;
+  const txns = db.transactions.filter((t) => t.userId === userId).map(toClientTx);
+  for (const rule of rules) {
+    const threshold = Number(rule.params?.thresholdPct) || 80;
+    for (const breach of budgetBreaches(txns, Object.fromEntries(
+      db.budgets.filter((b) => b.userId === userId).map((b) => [b.category, b.amount])
+    ), monthPrefix, threshold)) {
+      evaluated++;
+      if (!matchConditions(breach, rule.conditions)) continue;
+      if (fireAutopilotRule(userId, rule, `${monthPrefix}:${breach.category}`, breach,
+        `${breach.category} at ${breach.pct}% of budget (₹${breach.spent}/₹${breach.limit})`).fired) fired++;
+    }
+  }
+  if (evaluated > 0) await save();
+  return { evaluated, fired };
+}
+
+async function evaluateRecurringTrigger(userId, today) {
+  const rules = db.autopilotRules.filter((r) => r.userId === userId && r.status === 'active' &&
+    r.trigger === 'recurring_approaching');
+  let evaluated = 0, fired = 0;
+  const recs = db.recurring.filter((r) => r.userId === userId && r.status === 'active' && r.nextDate);
+  for (const rule of rules) {
+    const daysBefore = Number(rule.params?.daysBefore) || 3;
+    for (const rec of recs) {
+      const daysLeft = Math.round((Date.parse(rec.nextDate) - Date.parse(today)) / 86400000);
+      if (daysLeft < 0 || daysLeft > daysBefore) continue;
+      evaluated++;
+      const record = {
+        amount: toRupees(rec.amountPaise || 0), merchant: rec.name,
+        category: rec.category || '', type: rec.type, account: rec.account || ''
+      };
+      if (!matchConditions(record, rule.conditions)) continue;
+      if (fireAutopilotRule(userId, rule, `${rec.id}:${rec.nextDate}`, record,
+        `${rec.name} posts in ${daysLeft}d (${rec.nextDate}, ₹${record.amount})`).fired) fired++;
+    }
+  }
+  if (evaluated > 0) await save();
+  return { evaluated, fired };
+}
+
+async function evaluateMonthClosedTrigger(userId, refMonth) {
+  const rules = db.autopilotRules.filter((r) => r.userId === userId && r.status === 'active' &&
+    r.trigger === 'month_closed');
+  if (!rules.length) return { evaluated: 0, fired: 0 };
+  const prev = previousMonthPrefix((refMonth || todayISO()) + '-01');
+  const summary = monthSummary(db.transactions.filter((t) => t.userId === userId).map(toClientTx), prev);
+  let fired = 0;
+  for (const rule of rules) {
+    if (!matchConditions(summary, rule.conditions)) continue;
+    if (fireAutopilotRule(userId, rule, prev, summary,
+      `${prev}: income ₹${summary.income}, spent ₹${summary.spent}, net ₹${summary.net}`).fired) fired++;
+  }
+  await save();
+  return { evaluated: rules.length, fired };
+}
+
+app.get('/api/autopilot/rules', authMiddleware, async (req, res) => {
+  res.json({ rules: db.autopilotRules.filter((r) => r.userId === req.user.id) });
+});
+
+app.post('/api/autopilot/rules', authMiddleware, async (req, res) => {
+  const errors = validateRule(req.body || {});
+  if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+  const b = req.body;
+  const now = new Date().toISOString();
+  const hasDraft = (b.actions || []).some((a) => a.kind === 'create_draft');
+  const rule = {
+    id: uid('ar_'), userId: req.user.id, name: String(b.name).trim(),
+    trigger: b.trigger, conditions: b.conditions || [], actions: b.actions,
+    requireApproval: b.requireApproval === undefined ? hasDraft : b.requireApproval === true,
+    params: b.params || {}, status: 'active',
+    runCount: 0, lastRunAt: null, createdAt: now, updatedAt: now
+  };
+  db.autopilotRules.push(rule);
+  audit(req.user.id, 'create', 'autopilot_rule', rule.id, `${rule.trigger} ${rule.name}`);
+  await save();
+  res.status(201).json({ rule });
+});
+
+app.put('/api/autopilot/rules/:id', authMiddleware, async (req, res) => {
+  const rule = db.autopilotRules.find((r) => r.id === req.params.id && r.userId === req.user.id);
+  if (!rule) return res.status(404).json({ error: 'Rule not found' });
+  const b = req.body || {};
+  const merged = {
+    name: b.name !== undefined ? b.name : rule.name,
+    trigger: rule.trigger,
+    conditions: b.conditions !== undefined ? b.conditions : rule.conditions,
+    actions: b.actions !== undefined ? b.actions : rule.actions,
+    requireApproval: b.requireApproval !== undefined ? b.requireApproval : rule.requireApproval,
+    params: b.params !== undefined ? b.params : rule.params
+  };
+  if (b.status !== undefined && !['active', 'paused'].includes(b.status)) {
+    return res.status(400).json({ error: 'status must be active | paused' });
+  }
+  const errors = validateRule(merged);
+  if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+  Object.assign(rule, merged);
+  if (b.status !== undefined) rule.status = b.status;
+  rule.updatedAt = new Date().toISOString();
+  audit(req.user.id, 'update', 'autopilot_rule', rule.id, rule.name);
+  await save();
+  res.json({ rule });
+});
+
+app.delete('/api/autopilot/rules/:id', authMiddleware, async (req, res) => {
+  const rule = db.autopilotRules.find((r) => r.id === req.params.id && r.userId === req.user.id);
+  if (!rule) return res.status(404).json({ error: 'Rule not found' });
+  db.autopilotRules = db.autopilotRules.filter((r) => r.id !== rule.id);
+  audit(req.user.id, 'delete', 'autopilot_rule', rule.id, rule.name);
+  await save();
+  res.json({ ok: true });
+});
+
+app.post('/api/autopilot/evaluate', authMiddleware, async (req, res) => {
+  const trigger = req.body?.trigger;
+  if (!['budget_threshold', 'recurring_approaching', 'month_closed'].includes(trigger)) {
+    return res.status(400).json({
+      error: 'trigger must be budget_threshold | recurring_approaching | month_closed (transaction triggers fire automatically)'
+    });
+  }
+  const month = /^\d{4}-\d{2}$/.test(req.body?.month || '') ? req.body.month : todayISO().slice(0, 7);
+  let out;
+  if (trigger === 'budget_threshold') out = await evaluateBudgetTrigger(req.user.id, month);
+  else if (trigger === 'recurring_approaching') out = await evaluateRecurringTrigger(req.user.id, todayISO());
+  else out = await evaluateMonthClosedTrigger(req.user.id, month);
+  res.json({ ok: true, trigger, ...out });
+});
+
+app.get('/api/autopilot/runs', authMiddleware, async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const rows = db.autopilotRuns.filter((r) => r.userId === req.user.id)
+    .sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, limit);
+  res.json({ runs: rows });
+});
+
+app.get('/api/notifications', authMiddleware, async (req, res) => {
+  const rows = db.notifications.filter((n) => n.userId === req.user.id)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)).slice(0, 200);
+  res.json({ notifications: rows, unread: rows.filter((n) => n.status === 'unread').length });
+});
+
+app.post('/api/notifications/:id/read', authMiddleware, async (req, res) => {
+  const n = db.notifications.find((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (!n) return res.status(404).json({ error: 'Notification not found' });
+  if (n.status === 'unread') { n.status = 'read'; await save(); }
+  res.json({ ok: true });
+});
+
+app.post('/api/autopilot/approve/:id', authMiddleware, async (req, res) => {
+  const n = db.notifications.find((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (!n) return res.status(404).json({ error: 'Notification not found' });
+  if (n.kind !== 'approval' || !n.payload?.draft) {
+    return res.status(400).json({ error: 'This notification has nothing to approve' });
+  }
+  if (n.status === 'approved') return res.status(400).json({ error: 'Already approved — check Transactions for the draft' });
+  const tx = buildTx(req.user.id, { ...n.payload.draft, source: 'autopilot' });
+  db.transactions.push(tx);
+  n.status = 'approved';
+  audit(req.user.id, 'approve', 'autopilot_draft', tx.id, n.title);
+  await save();
+  res.status(201).json({ transaction: toClientTx(tx) });
+});
+
 // ── Preferences API ──
 app.get('/api/preferences', authMiddleware, async (req, res) => {
   const p = db.preferences.find((x) => x.userId === req.user.id) || {};
@@ -1075,13 +1666,16 @@ app.get('/api/export', authMiddleware, async (req, res) => {
     upiIds: db.upiIds.filter((u) => u.userId === id),
     goals: db.goals.filter((g) => g.userId === id),
     recurring: db.recurring.filter((r) => r.userId === id),
+    autopilotRules: db.autopilotRules.filter((r) => r.userId === id),
+    notifications: db.notifications.filter((n) => n.userId === id),
+    securityEvents: db.securityEvents.filter((e) => e.userId === id),
     preferences: db.preferences.find((p) => p.userId === id) || {}
   });
 });
 
 app.delete('/api/account/data', authMiddleware, async (req, res) => {
   const id = req.user.id;
-  for (const k of ['transactions', 'budgets', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'imports']) {
+  for (const k of ['transactions', 'budgets', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'resets', 'autopilotRules', 'autopilotRuns', 'notifications', 'securityEvents', 'imports']) {
     db[k] = db[k].filter((x) => x.userId !== id);
   }
   db.sessions = db.sessions.filter((s) => s.userId !== id);
@@ -1092,6 +1686,13 @@ app.delete('/api/account/data', authMiddleware, async (req, res) => {
 });
 
 // ── Static frontend ──
+// JSON 404 for unknown /api/* routes on ANY method (Express's default is an
+// HTML page, which the frontend cannot parse — surfacing as bare "Request
+// failed (404)"). Must sit after all API routes, before static + SPA fallback.
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: `Unknown API route: ${req.method} ${req.path}` });
+});
+
 app.use(express.static(path.join(__dirname, 'dist')));
 
 app.get(/.*/, async (req, res) => {

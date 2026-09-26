@@ -38,6 +38,12 @@ export const api = {
   me: () => request('/api/auth/me'),
   changePassword: (current, next) =>
     request('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ current, next }) }),
+  forgotPassword: (email) =>
+    request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
+  resetPassword: (email, code, newPassword) =>
+    request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify({ email, code, newPassword }) }),
+  updateProfile: (patch) =>
+    request('/api/auth/profile', { method: 'PUT', body: JSON.stringify(patch) }).then((d) => d.user),
 
   listTransactions: async () => (await request('/api/transactions')).transactions,
   createTransaction: async (tx) => (await request('/api/transactions', { method: 'POST', body: JSON.stringify(tx) })).transaction,
@@ -88,10 +94,30 @@ export const api = {
     (await request(`/api/recurring/${id}/post-now`, { method: 'POST', body: JSON.stringify({}) })),
   deleteRecurring: (id) => request(`/api/recurring/${id}`, { method: 'DELETE' }),
 
+  getAutopilotRules: async () => (await request('/api/autopilot/rules')).rules,
+  createAutopilotRule: async (r) => (await request('/api/autopilot/rules', { method: 'POST', body: JSON.stringify(r) })).rule,
+  updateAutopilotRule: async (id, patch) =>
+    (await request(`/api/autopilot/rules/${id}`, { method: 'PUT', body: JSON.stringify(patch) })).rule,
+  deleteAutopilotRule: (id) => request(`/api/autopilot/rules/${id}`, { method: 'DELETE' }),
+  evaluateAutopilot: (trigger, month) =>
+    request('/api/autopilot/evaluate', { method: 'POST', body: JSON.stringify({ trigger, month }) }),
+  getAutopilotRuns: async (limit) => (await request(`/api/autopilot/runs?limit=${limit || 50}`)).runs,
+  getNotifications: () => request('/api/notifications'),
+  markNotificationRead: (id) => request(`/api/notifications/${id}/read`, { method: 'POST' }),
+  approveDraft: (id) => request(`/api/autopilot/approve/${id}`, { method: 'POST' }),
+
   getPreferences: async () => (await request('/api/preferences')).preferences,
   savePreferences: async (p) =>
     (await request('/api/preferences', { method: 'PUT', body: JSON.stringify(p) })).preferences,
 
   exportAll: () => request('/api/export'),
   wipeData: () => request('/api/account/data', { method: 'DELETE' }),
+
+  getSecuritySessions: async () => (await request('/api/security/sessions')).sessions,
+  revokeSecuritySession: (id) => request(`/api/security/sessions/${id}/revoke`, { method: 'POST' }),
+  revokeOtherSessions: () => request('/api/security/sessions/revoke-others', { method: 'POST' }),
+  getSecurityEvents: async (limit) => (await request(`/api/security/events?limit=${limit || 50}`)).events,
+  getSecurityOverview: () => request('/api/security/overview'),
+  deleteAccount: (password, confirmation) =>
+    request('/api/security/delete-account', { method: 'POST', body: JSON.stringify({ password, confirmation }) }),
 };

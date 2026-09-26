@@ -1,8 +1,14 @@
 import React, { useState } from 'react';
 import { api, getTheme, setTheme } from '../services/api.js';
 
-export default function SettingsPage({ user, preferences, onPrefsChanged, onTheme, onWipe }) {
+export const AVATAR_EMOJI = ['😀', '😎', '🦊', '🐼', '🦁', '🐸', '🦄', '🐝', '🌟', '⚡', '💎', '🚀', '🌈', '🍀', '🔥', '💰'];
+export const AVATAR_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444', '#14b8a6', '#6366f1'];
+
+export default function SettingsPage({ user, preferences, onPrefsChanged, onTheme, onWipe, onUserChanged, onNavigate }) {
   const [name, setName] = useState(user?.name || '');
+  const [emoji, setEmoji] = useState(user?.avatar?.emoji || '😀');
+  const [color, setColor] = useState(user?.avatar?.color || '#3b82f6');
+  const [savingProfile, setSavingProfile] = useState(false);
   const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
@@ -24,6 +30,18 @@ export default function SettingsPage({ user, preferences, onPrefsChanged, onThem
     document.documentElement.setAttribute('data-theme', t);
     onTheme(t);
     setPref({ theme: t });
+  };
+
+  const saveProfile = async () => {
+    setError(''); setMsg('');
+    if (!name.trim()) { setError('Display name cannot be empty.'); return; }
+    setSavingProfile(true);
+    try {
+      const updated = await api.updateProfile({ name: name.trim(), avatar: { emoji, color } });
+      if (onUserChanged) onUserChanged(updated);
+      setMsg('Profile saved.');
+    } catch (err) { setError(err.message); }
+    finally { setSavingProfile(false); }
   };
 
   const changePassword = async (e) => {
@@ -65,11 +83,37 @@ export default function SettingsPage({ user, preferences, onPrefsChanged, onThem
       <div className="grid-2">
         <div className="card">
           <div className="card-head"><h3>Profile</h3></div>
-          <p><b>{user?.name}</b></p>
-          <p className="muted small">{user?.email}</p>
+          <div className="row" style={{ alignItems: 'center', marginBottom: 10 }}>
+            <span className="avatar" style={{ background: color, width: 44, height: 44, fontSize: 24 }}>{emoji}</span>
+            <div><b>{name || user?.name}</b><br /><span className="muted small">{user?.email}</span></div>
+          </div>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--muted)' }}>Display name
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={user?.name} disabled title="Name changes coming soon" />
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={user?.name} maxLength={80} />
           </label>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>Avatar</div>
+          <div className="row" style={{ gap: 6, marginTop: 4 }}>
+            {AVATAR_EMOJI.map((a) => (
+              <button key={a} type="button" onClick={() => setEmoji(a)}
+                style={{
+                  fontSize: 22, width: 40, height: 40, borderRadius: 10, cursor: 'pointer',
+                  border: emoji === a ? '2px solid var(--accent)' : '1px solid var(--line)',
+                  background: emoji === a ? color : 'transparent'
+                }}>{a}</button>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10 }}>Avatar colour</div>
+          <div className="row" style={{ gap: 6, marginTop: 4 }}>
+            {AVATAR_COLORS.map((c) => (
+              <button key={c} type="button" onClick={() => setColor(c)} title={c}
+                style={{
+                  width: 28, height: 28, borderRadius: '50%', cursor: 'pointer', background: c,
+                  border: color === c ? '2px solid var(--ink)' : '1px solid var(--line)'
+                }} />
+            ))}
+          </div>
+          <button className="btn primary" style={{ marginTop: 12 }} onClick={saveProfile} disabled={savingProfile}>
+            {savingProfile ? 'Saving…' : 'Save profile'}
+          </button>
         </div>
         <div className="card">
           <div className="card-head"><h3>Appearance</h3></div>
@@ -93,7 +137,7 @@ export default function SettingsPage({ user, preferences, onPrefsChanged, onThem
         <div className="card">
           <div className="card-head"><h3>Change password</h3></div>
           <form onSubmit={changePassword} className="form-grid two">
-            <label className="span-2" style={{ gridColumn: 'span 2' }}>Current password<input className="input" type="password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} required autoComplete="current-password" /></label>
+            <label className="span-2">Current password<input className="input" type="password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} required autoComplete="current-password" /></label>
             <label>New password<input className="input" type="password" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} required autoComplete="new-password" /></label>
             <label>Confirm new<input className="input" type="password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} required autoComplete="new-password" /></label>
           </form>
@@ -103,6 +147,12 @@ export default function SettingsPage({ user, preferences, onPrefsChanged, onThem
           <div className="card-head"><h3>Backup &amp; privacy</h3></div>
           <p className="muted small">Download everything (transactions, accounts, budgets, goals, rules) as JSON. Store it somewhere safe.</p>
           <div className="row"><button className="btn" onClick={exportData}>⬇ Download backup</button></div>
+          {onNavigate && (
+            <div className="row" style={{ marginTop: 8 }}>
+              <button className="btn" onClick={() => onNavigate('security')}>🛡️ Open Security &amp; Privacy →</button>
+            </div>
+          )}
+          <p className="muted small">Sessions, sign-in history, password controls and account deletion live in Security &amp; Privacy.</p>
         </div>
         <div className="card">
           <div className="card-head"><h3>Danger zone</h3></div>

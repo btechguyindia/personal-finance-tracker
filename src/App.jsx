@@ -8,14 +8,43 @@ import CategoriesPage from './components/CategoriesPage.jsx';
 import UpiPage from './components/UpiPage.jsx';
 import GoalsPage from './components/GoalsPage.jsx';
 import RecurringPage from './components/RecurringPage.jsx';
+import CalculatorsPage from './components/CalculatorsPage.jsx';
+import AutopilotPage from './components/AutopilotPage.jsx';
+import TipsPage from './components/TipsPage.jsx';
+import TrendsPage from './components/TrendsPage.jsx';
+import LearnToolsPage from './components/LearnToolsPage.jsx';
 import SettingsPage from './components/SettingsPage.jsx';
+import SecurityPage from './components/SecurityPage.jsx';
+import CommandCenterPage from './components/CommandCenterPage.jsx';
+import CashflowPage from './components/CashflowPage.jsx';
+import BucketsPage from './components/BucketsPage.jsx';
+import DetectivePage from './components/DetectivePage.jsx';
+import HeatmapPage from './components/HeatmapPage.jsx';
+import PurchaseLabPage from './components/PurchaseLabPage.jsx';
+import AnalystPage from './components/AnalystPage.jsx';
+import SubscriptionsPage from './components/SubscriptionsPage.jsx';
+import AccuracyPage from './components/AccuracyPage.jsx';
+import MilestonesPage from './components/MilestonesPage.jsx';
+import AdvancedAnalyticsPage from './components/AdvancedAnalyticsPage.jsx';
 import Celebration from './components/Celebration.jsx';
+import Assistant from './components/Assistant.jsx';
 import Login from './components/Login.jsx';
 import { api, clearToken, getToken, getTheme } from './services/api.js';
 
 const NAV = [
+  { id: 'command', label: 'Command Center', ico: '🎛️' },
   { id: 'overview', label: 'Overview', ico: '🏠' },
+  { id: 'cashflow', label: 'Cash Flow', ico: '🔮' },
+  { id: 'buckets', label: 'Buckets', ico: '🪣' },
   { id: 'transactions', label: 'Transactions', ico: '🧾' },
+  { id: 'detective', label: 'Detective', ico: '🕵️' },
+  { id: 'heatmap', label: 'Heatmap', ico: '🗓️' },
+  { id: 'purchaselab', label: 'Purchase Lab', ico: '🧪' },
+  { id: 'analyst', label: 'AI Analyst', ico: '🤖' },
+  { id: 'subs', label: 'Subscriptions', ico: '📡' },
+  { id: 'accuracy', label: 'Accuracy', ico: '🎯' },
+  { id: 'milestones', label: 'Milestones', ico: '🏆' },
+  { id: 'advanced', label: 'Advanced', ico: '🧬' },
   { id: 'accounts', label: 'Accounts & Wallets', ico: '🏦' },
   { id: 'budgets', label: 'Budgets', ico: '🎯' },
   { id: 'categories', label: 'Categories', ico: '🏷️' },
@@ -23,10 +52,27 @@ const NAV = [
   { id: 'goals', label: 'Savings Goals', ico: '🐷' },
   { id: 'reports', label: 'Reports & Analytics', ico: '📊' },
   { id: 'recurring', label: 'Recurring', ico: '🔁' },
+  { id: 'calculators', label: 'Calculators', ico: '🧮' },
+  { id: 'autopilot', label: 'Autopilot', ico: '✈️' },
+  { id: 'tips', label: 'Tips & Suggestions', ico: '💡' },
+  { id: 'trends', label: 'Trends & Health', ico: '📈' },
+  { id: 'learn', label: 'Learn & Tools', ico: '📚' },
+  { id: 'security', label: 'Security & Privacy', ico: '🛡️' },
   { id: 'settings', label: 'Settings', ico: '⚙️' }
 ];
 
 const TITLES = {
+  command: ['Financial Command Center', 'Safe-to-spend, bills, runway, checklist + Can I afford this?'],
+  cashflow: ['Future Cash Flow', '7–180d projection with breach dates + scenarios.'],
+  buckets: ['Money Buckets', 'Virtual envelopes + simulated allocation (confirm to post).'],
+  detective: ['Transaction Detective', 'Daily reconciliation inbox — flags only, never auto-deletes.'],
+  heatmap: ['Spending Heatmap', 'Daily calendar, weekday stats, day timeline.'],
+  purchaselab: ['Purchase Lab', 'Buy today vs next month vs save 3 months.'],
+  analyst: ['AI Analyst', 'Cited answers from your ledger — says when data is incomplete.'],
+  subs: ['Subscriptions Radar', 'Detected renewals, totals, confirm/dismiss.'],
+  accuracy: ['Accuracy Monitor', 'Statement vs ledger + monthly books-closed report.'],
+  milestones: ['Milestones', 'Measurable targets with plan-vs-actual timeline.'],
+  advanced: ['Advanced Analytics', 'Sankey, velocity, lifestyle, stress-test, anomaly map.'],
   overview: ['Overview', 'Your complete financial picture — live from your ledger.'],
   transactions: ['Transactions', 'Every rupee earned, spent, transferred or refunded.'],
   accounts: ['Accounts & Wallets', 'Cash, banks, UPI accounts and credit cards.'],
@@ -36,6 +82,12 @@ const TITLES = {
   goals: ['Savings Goals', 'Targets, contributions and progress.'],
   reports: ['Reports & Analytics', 'Interactive charts, comparisons and insights.'],
   recurring: ['Recurring Payments', 'Rent, SIPs & subscriptions auto-created on schedule.'],
+  calculators: ['Calculators', 'EMI, SIP, FD, interest and discount maths.'],
+  autopilot: ['Autopilot', 'Rules that watch, notify and draft — never move money.'],
+  tips: ['Tips & Suggestions', 'Daily tip, personalized advice and smart money moves.'],
+  trends: ['Trends & Health', '6-month trends, movers and your financial health score.'],
+  learn: ['Learn & Tools', 'Money guides plus SIP, tax, emergency and 50/30/20 tools.'],
+  security: ['Security & Privacy', 'Sessions, activity, password and account deletion.'],
   settings: ['Settings', 'Profile, preferences, backup and privacy.']
 };
 
@@ -140,7 +192,11 @@ export default function App() {
         </nav>
         <div className="side-foot">
           <div className="user-chip">
-            <span className="avatar">{initial}</span>
+            {user.avatar ? (
+              <span className="avatar" style={{ background: user.avatar.color }}>{user.avatar.emoji}</span>
+            ) : (
+              <span className="avatar">{initial}</span>
+            )}
             <div className="who"><b>{user.name}</b><span>{user.email}</span></div>
           </div>
           <div className="side-actions">
@@ -165,6 +221,17 @@ export default function App() {
         <main className="main">
           {error && <div className="card"><div className="error">{error}</div></div>}
           {loading && <div className="muted small">Loading your data…</div>}
+          {tab === 'command' && <CommandCenterPage transactions={transactions} accounts={accounts} budgets={budgets} recurring={recurring} goals={goals} />}
+          {tab === 'cashflow' && <CashflowPage transactions={transactions} accounts={accounts} recurring={recurring} />}
+          {tab === 'buckets' && <BucketsPage />}
+          {tab === 'detective' && <DetectivePage transactions={transactions} recurring={recurring} onGoToTransactions={() => go('transactions')} />}
+          {tab === 'heatmap' && <HeatmapPage transactions={transactions} />}
+          {tab === 'purchaselab' && <PurchaseLabPage transactions={transactions} accounts={accounts} recurring={recurring} budgets={budgets} goals={goals} />}
+          {tab === 'analyst' && <AnalystPage transactions={transactions} recurring={recurring} />}
+          {tab === 'subs' && <SubscriptionsPage transactions={transactions} />}
+          {tab === 'accuracy' && <AccuracyPage transactions={transactions} accounts={accounts} />}
+          {tab === 'milestones' && <MilestonesPage transactions={transactions} accounts={accounts} budgets={budgets} goals={goals} />}
+          {tab === 'advanced' && <AdvancedAnalyticsPage transactions={transactions} budgets={budgets} />}
           {tab === 'overview' && (
             <OverviewPage transactions={transactions} accounts={accounts} budgets={budgets} onNavigate={go} />
           )}
@@ -184,8 +251,22 @@ export default function App() {
             <AnalyticsPage transactions={transactions} budgets={budgets} accounts={accounts.map((a) => a.name)} onGoToTransactions={() => go('transactions')} />
           )}
           {tab === 'recurring' && <RecurringPage rules={recurring} accounts={accounts} onChanged={loadAll} />}
+          {tab === 'calculators' && <CalculatorsPage />}
+          {tab === 'autopilot' && <AutopilotPage />}
+          {tab === 'tips' && (
+            <TipsPage transactions={transactions} budgets={budgets} recurring={recurring} onNavigate={go} />
+          )}
+          {tab === 'trends' && (
+            <TrendsPage transactions={transactions} accounts={accounts} budgets={budgets} />
+          )}
+          {tab === 'learn' && (
+            <LearnToolsPage transactions={transactions} accounts={accounts} />
+          )}
+          {tab === 'security' && (
+            <SecurityPage onLogout={logout} />
+          )}
           {tab === 'settings' && (
-            <SettingsPage user={user} preferences={prefs} onPrefsChanged={setPrefs} onTheme={() => {}} onWipe={wipe} />
+            <SettingsPage user={user} preferences={prefs} onPrefsChanged={setPrefs} onTheme={() => {}} onWipe={wipe} onUserChanged={setUser} onNavigate={go} />
           )}
         </main>
       </div>
@@ -194,6 +275,7 @@ export default function App() {
         <button className="fab" onClick={() => { go('transactions'); setModalSignal((s) => s + 1); }} title="Add transaction">+ Add</button>
       )}
       <Celebration data={celebration} onDone={() => setCelebration(null)} />
+      <Assistant transactions={transactions} budgets={budgets} accounts={accounts} goals={goals} user={user} fabVisible={tab !== 'transactions'} />
     </div>
   );
 }

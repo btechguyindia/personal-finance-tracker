@@ -110,9 +110,9 @@ export default function OverviewPage({ transactions, accounts, budgets, onNaviga
           <div className="row"><b style={{ fontSize: 18 }}>{formatINR(stats.netWorth)}</b>
             <span className="muted small">Assets {formatINR(stats.totalAssets)} − debt {formatINR(stats.totalLiabilities)}</span></div>
           {netWorthRows.length === 0 ? <div className="empty">No accounts.</div> : netWorthRows.map((a) => (
-            <div key={a.name} className="row" style={{ padding: '4px 0' }}>
+            <div key={a.name} className="kv">
               <span>{a.name} <span className="muted small">· {a.type}</span></span>
-              <b className={a.balance < 0 ? 'bad' : ''}>{formatINR(a.balance)}</b>
+              <b className={a.balance < 0 ? 'warn' : ''}>{formatINR(a.balance)}</b>
             </div>
           ))}
         </div>
@@ -134,7 +134,7 @@ export default function OverviewPage({ transactions, accounts, budgets, onNaviga
             </ResponsiveContainer>
             <div style={{ marginTop: 8 }}>
               {topCats.map((c, i) => (
-                <div key={c.category} className="row" style={{ padding: '3px 0' }}>
+                <div key={c.category} className="kv">
                   <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 5, background: COLORS[i % COLORS.length], marginRight: 8 }} />{c.category}
                     <span className="muted small"> · {c.share.toFixed(0)}%</span></span>
                   <b>{formatINR(c.amount)}</b>

@@ -65,11 +65,11 @@ export default function AccountsPage({ accounts, onChanged }) {
           <label>Institution (optional)<input className="input" value={form.institution} onChange={(e) => set('institution', e.target.value)} placeholder="e.g. HDFC Bank" /></label>
           <label>Opening balance (₹)<input className="input" type="number" step="0.01" value={form.openingBalance} onChange={(e) => set('openingBalance', e.target.value)} placeholder="0" /></label>
           <label>Status<select value={form.status} onChange={(e) => set('status', e.target.value)}><option value="active">Active</option><option value="archived">Archived</option></select></label>
-          <div className="row span-3" style={{ gridColumn: 'span 3' }}>
+          <div className="row span-3">
             <button className="btn primary" disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Add account'}</button>
             {editing && <button type="button" className="btn" onClick={reset}>Cancel</button>}
           </div>
-          {error && <div className="error span-3" style={{ gridColumn: 'span 3' }}>{error}</div>}
+          {error && <div className="error span-3">{error}</div>}
         </form>
         <p className="muted small">Balance = opening + money received − money paid (completed transactions). Renaming an account moves its history with it. Opening balances are never silently changed.</p>
       </div>

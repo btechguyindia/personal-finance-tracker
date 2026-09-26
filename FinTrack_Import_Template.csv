@@ -1,0 +1,9 @@
+date,type,amount,category,subcategory,paymentMethod,account,accountFrom,accountTo,merchant,upiRef,description,status
+2026-09-01,income,80000,Salary,,Bank transfer,HDFC Savings,,,Acme Corp,,September salary,completed
+2026-09-02,expense,20000,Housing,Rent,Bank transfer,HDFC Savings,,,Landlord,,October rent,completed
+2026-09-05,expense,450,Food,Restaurants,UPI,HDFC Savings,,,Swiggy,417712345678,Dinner order,completed
+2026-09-06,expense,1200,Transportation,Fuel,UPI,HDFC Savings,,,HP Petrol,,Fuel refill,completed
+2026-09-07,transfer,10000,Transfer,,Bank transfer,,HDFC Savings,Groww SIP,Transfer to investment,,"Monthly SIP",completed
+2026-09-08,refund,450,Food,Restaurants,UPI,HDFC Savings,,,Swiggy,417712345679,Refund for cancelled order,completed
+2026-09-10,expense,499,Entertainment,Streaming,UPI,HDFC Savings,,,Netflix,,Monthly plan,completed
+2026-09-12,expense,2500,Shopping,Clothing,Credit card,ICICI Credit Card,,,Amazon,,Shoes order,pending
