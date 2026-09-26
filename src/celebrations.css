@@ -1,0 +1,73 @@
+/* ── Money celebrations: cash deduction, credit, savings & goal wins ── */
+.cel-back {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(8, 15, 30, 0.6); backdrop-filter: blur(3px);
+  animation: cel-fadein 0.25s ease;
+  overflow: hidden; cursor: pointer;
+}
+.cel-particles { position: absolute; inset: 0; pointer-events: none; }
+.cel-particle {
+  position: absolute; top: -8%;
+  display: inline-block;
+  animation: cel-fall linear forwards;
+}
+@keyframes cel-fall {
+  0% { transform: translateY(-5vh) rotate(0deg); opacity: 0; }
+  10% { opacity: 1; }
+  100% { transform: translateY(110vh) translateX(var(--drift, 0px)) rotate(340deg); opacity: 0.9; }
+}
+@keyframes cel-fadein { from { opacity: 0; } to { opacity: 1; } }
+
+.cel-card {
+  position: relative; z-index: 1; text-align: center;
+  background: var(--card); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 22px;
+  padding: 34px 48px; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  animation: cel-pop 0.45s cubic-bezier(0.2, 1.4, 0.4, 1);
+  max-width: min(420px, 90vw);
+}
+@keyframes cel-pop {
+  0% { transform: scale(0.6) translateY(30px); opacity: 0; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+.cel-icon { font-size: 64px; animation: cel-bounce 0.9s ease infinite alternate; }
+@keyframes cel-bounce { from { transform: translateY(0) scale(1); } to { transform: translateY(-10px) scale(1.06); } }
+.cel-title { font-size: 22px; font-weight: 800; margin-top: 10px; }
+.cel-amount { font-size: 34px; font-weight: 800; margin: 8px 0 2px; font-variant-numeric: tabular-nums; }
+.cel-back.is-debit .cel-amount { color: var(--bad); }
+.cel-back.is-credit .cel-amount { color: var(--good); }
+.cel-back.is-save .cel-amount { color: var(--good); }
+.cel-back.is-transfer .cel-amount { color: var(--accent); }
+.cel-back.is-goal .cel-amount { color: var(--warn); }
+.cel-sub { font-size: 13.5px; color: var(--muted); }
+.cel-btn { margin-top: 16px; }
+.cel-goalbar { height: 10px; border-radius: 99px; background: var(--line); margin-top: 14px; overflow: hidden; }
+.cel-goalbar > div { height: 100%; border-radius: 99px; background: linear-gradient(90deg, #22c55e, #eab308); animation: cel-fill 1.2s ease; }
+@keyframes cel-fill { from { width: 0 !important; } }
+
+/* Goal ring shown in the achievements hall */
+.achieve-ring { position: relative; width: 74px; height: 74px; flex-shrink: 0; }
+.achieve-ring svg { transform: rotate(-90deg); }
+.achieve-ring .pct {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 14px;
+}
+.achieve-card {
+  display: flex; gap: 14px; align-items: center; padding: 14px;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--card);
+  margin-bottom: 10px; box-shadow: var(--shadow);
+}
+.achieve-card.won { border-color: var(--warn); background: linear-gradient(135deg, color-mix(in srgb, var(--warn) 10%, var(--card)), var(--card)); }
+.trophy { font-size: 34px; }
+.template-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.template-chip {
+  border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  border-radius: 999px; padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.template-chip:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cel-particle { display: none; }
+  .cel-card, .cel-icon, .cel-goalbar > div { animation: none; }
+}

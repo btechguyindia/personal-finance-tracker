@@ -1,0 +1,27 @@
+{
+  "name": "personal-finance-tracker-analytics",
+  "version": "1.0.0",
+  "description": "Personal Finance Tracker with Advanced Analytics & Financial Insights",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "express": "^4.21.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.13.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}
