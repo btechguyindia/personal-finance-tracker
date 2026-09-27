@@ -17,6 +17,27 @@ export function getTheme() {
 export function setTheme(t) {
   try { localStorage.setItem(THEME_KEY, t); } catch { /* ignore */ }
 }
+export const THEMES = ['light', 'dark', 'bank'];
+export function isBankTheme() {
+  return getTheme() === 'bank';
+}
+// Toggle between the premium Bank theme and the previously-used classic
+// (light/dark) theme. Persists both, applies to <html>, returns the new theme.
+export function toggleBankTheme() {
+  const cur = getTheme();
+  let next;
+  if (cur === 'bank') {
+    try { next = localStorage.getItem('fintrack_theme_classic') || 'light'; }
+    catch { next = 'light'; }
+    if (!['light', 'dark'].includes(next)) next = 'light';
+  } else {
+    try { localStorage.setItem('fintrack_theme_classic', cur); } catch { /* ignore */ }
+    next = 'bank';
+  }
+  setTheme(next);
+  try { document.documentElement.setAttribute('data-theme', next); } catch { /* ignore */ }
+  return next;
+}
 
 // Conflict contract (Milestone 2): a 409 VERSION_CONFLICT means another writer
 // committed first and NOTHING was written. Callers must refresh the relevant

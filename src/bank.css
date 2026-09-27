@@ -1,0 +1,163 @@
+/* ── Bank theme: premium blue & green fintech (Suno-inspired, cinematic) ──
+   Scoped entirely under [data-theme='bank'] — classic light/dark UI untouched. */
+
+[data-theme='bank'] {
+  --bg: #F5F8FA; --card: #FFFFFF; --ink: #172D3B; --muted: #71818C;
+  --line: #DCE5EA; --accent: #1769AA; --accent-ink: #FFFFFF;
+  --accent-soft: #DCECF7; --good: #07865F; --good-soft: #D9F2E6;
+  --bad: #C0453D; --bad-soft: #FBEAE7; --warn: #9A6B1A; --warn-soft: #FaF0DC;
+  --sidebar: #102D46; --sidebar-ink: #A9BECD; --sidebar-active: #102D46;
+  --shadow: 0 1px 2px rgba(16, 45, 70, 0.05), 0 8px 24px rgba(16, 45, 70, 0.07);
+  --radius: 14px;
+  --font: 'Inter', 'Manrope', 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+[data-theme='bank'] body {
+  background-color: #F5F8FA;
+  background-image:
+    radial-gradient(1100px 520px at 88% -12%, rgba(38, 121, 199, 0.09), transparent 60%),
+    radial-gradient(900px 500px at -12% 22%, rgba(7, 134, 95, 0.07), transparent 60%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+}
+
+/* ── Sidebar: deep navy trust ── */
+[data-theme='bank'] .sidebar { background: linear-gradient(180deg, #102D46 0%, #0C2337 100%); }
+[data-theme='bank'] .nav button.on {
+  background: #DCECF7; color: #102D46; font-weight: 700;
+}
+[data-theme='bank'] .nav button:not(.on):hover { background: rgba(255, 255, 255, 0.08); }
+[data-theme='bank'] .side-actions button.bank-on {
+  background: #DCECF7; color: #102D46; border-color: #DCECF7; font-weight: 700;
+}
+
+/* ── Topbar: clean paper with hairline ── */
+[data-theme='bank'] .topbar {
+  background: rgba(255, 255, 255, 0.86);
+  border-bottom: 1px solid #DCE5EA;
+}
+
+/* ── Hero metric: navy balance card ── */
+[data-theme='bank'] .grid-4 > .kpi:first-child {
+  background: linear-gradient(135deg, #102D46 0%, #1769AA 100%);
+  border-color: transparent; color: #fff;
+}
+[data-theme='bank'] .grid-4 > .kpi:first-child .k-label,
+[data-theme='bank'] .grid-4 > .kpi:first-child .k-sub { color: rgba(255, 255, 255, 0.78); }
+[data-theme='bank'] .grid-4 > .kpi:first-child .k-value { color: #fff; }
+[data-theme='bank'] .grid-4 > .kpi:first-child::before { background: #2FBF8F; }
+
+/* ── Gentle lift ── */
+[data-theme='bank'] .kpi,
+[data-theme='bank'] .acct-card,
+[data-theme='bank'] .achieve-card {
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+[data-theme='bank'] .kpi:hover,
+[data-theme='bank'] .acct-card:hover,
+[data-theme='bank'] .achieve-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 2px 4px rgba(16, 45, 70, 0.06), 0 14px 32px rgba(16, 45, 70, 0.12);
+}
+
+/* ── Buttons / inputs / segments ── */
+[data-theme='bank'] .btn.primary { background: #1769AA; border-color: #1769AA; }
+[data-theme='bank'] .btn.primary:hover { background: #125A92; border-color: #125A92; }
+[data-theme='bank'] .fab { background: #1769AA; box-shadow: 0 8px 24px rgba(23, 105, 170, 0.4); }
+[data-theme='bank'] .input:focus, [data-theme='bank'] select:focus {
+  outline: 2px solid #2679C7; outline-offset: -1px; border-color: #2679C7;
+}
+[data-theme='bank'] .seg button.on { background: #1769AA; border-color: #1769AA; }
+[data-theme='bank'] .progress > div { background: #2679C7; }
+[data-theme='bank'] .progress.over > div { background: #C0453D; }
+
+/* ── Status pills: mint / blue / amber / coral ── */
+[data-theme='bank'] .pill.income, [data-theme='bank'] .pill.completed, [data-theme='bank'] .pill.active {
+  background: #D9F2E6; color: #086B50;
+}
+[data-theme='bank'] .pill.transfer { background: #DCECF7; color: #1769AA; }
+[data-theme='bank'] .pill.pending, [data-theme='bank'] .pill.scheduled, [data-theme='bank'] .pill.paused,
+[data-theme='bank'] .pill.refund, [data-theme='bank'] .pill.adjustment {
+  background: #FaF0DC; color: #9A6B1A;
+}
+[data-theme='bank'] .pill.expense { background: #FBEAE7; color: #C0453D; }
+
+/* ── Tabular numerals for money ── */
+[data-theme='bank'] .k-value, [data-theme='bank'] .num,
+[data-theme='bank'] td, [data-theme='bank'] .stat-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Focus visibility ── */
+[data-theme='bank'] :focus-visible {
+  outline: 2px solid #2679C7; outline-offset: 2px; border-radius: 6px;
+}
+
+/* ══ Login: cinematic ice-blue hero + floating paper cards ══ */
+[data-theme='bank'] .login-hero {
+  background:
+    radial-gradient(700px 380px at 80% 8%, rgba(217, 242, 230, 0.9), transparent 65%),
+    radial-gradient(900px 520px at 15% 110%, rgba(220, 236, 247, 0.9), transparent 60%),
+    linear-gradient(160deg, #F3F8FC 0%, #E7F0F7 55%, #ECF8F2 100%);
+  position: relative;
+  overflow: hidden;
+}
+[data-theme='bank'] .login-hero h1 { color: #102D46; }
+[data-theme='bank'] .login-hero p { color: #5B6B78 !important; }
+[data-theme='bank'] .login-hero .brand.big { color: #102D46 !important; }
+[data-theme='bank'] .login-hero .muted.small { color: #71818C !important; }
+[data-theme='bank'] .hero-points li { color: #33475A; }
+[data-theme='bank'] .hero-points .tick { background: #D9F2E6; color: #086B50; }
+
+.bank-float { display: none; }
+[data-theme='bank'] .bank-float { display: block; }
+[data-theme='bank'] .bf-card {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #DCE5EA;
+  border-radius: 16px;
+  padding: 14px 18px;
+  box-shadow: 0 2px 4px rgba(16, 45, 70, 0.05), 0 18px 44px rgba(16, 45, 70, 0.13);
+  backdrop-filter: blur(4px);
+  animation: bf-float 7s ease-in-out infinite;
+  min-width: 190px;
+}
+[data-theme='bank'] .bf-balance { top: 24px; right: 28px; transform: rotate(2deg); }
+[data-theme='bank'] .bf-spend { top: 190px; right: 120px; transform: rotate(-2.5deg); animation-delay: -2.4s; }
+[data-theme='bank'] .bf-save { bottom: 64px; right: 36px; transform: rotate(1.5deg); animation-delay: -4.8s; }
+@keyframes bf-float {
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -12px; }
+}
+[data-theme='bank'] .bf-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #71818C; font-weight: 700; }
+[data-theme='bank'] .bf-value { font-size: 24px; font-weight: 800; color: #102D46; font-variant-numeric: tabular-nums; }
+[data-theme='bank'] .bf-delta { font-size: 12px; color: #07865F; font-weight: 700; }
+[data-theme='bank'] .bf-bars { display: flex; align-items: flex-end; gap: 5px; height: 56px; margin-top: 8px; }
+[data-theme='bank'] .bf-bars i {
+  flex: 1; border-radius: 4px 4px 2px 2px;
+  background: linear-gradient(180deg, #2679C7, #DCECF7);
+}
+[data-theme='bank'] .bf-bars i.hot { background: linear-gradient(180deg, #07865F, #D9F2E6); }
+[data-theme='bank'] .bf-ring {
+  width: 56px; height: 56px; border-radius: 50%; margin-top: 8px;
+  background: conic-gradient(#07865F 0 72%, #EAF1F5 72% 100%);
+  display: flex; align-items: center; justify-content: center;
+}
+[data-theme='bank'] .bf-ring span {
+  width: 40px; height: 40px; border-radius: 50%; background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; color: #102D46;
+}
+[data-theme='bank'] .bf-caption {
+  position: absolute; bottom: 22px; right: 36px;
+  font-size: 11px; color: #71818C;
+}
+@media (max-width: 1280px) {
+  [data-theme='bank'] .bf-spend { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-theme='bank'] .bf-card { animation: none; }
+  [data-theme='bank'] .kpi:hover,
+  [data-theme='bank'] .acct-card:hover,
+  [data-theme='bank'] .achieve-card:hover { transform: none; }
+}

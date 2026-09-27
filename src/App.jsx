@@ -31,10 +31,16 @@ const SubscriptionsPage = lazy(() => import('./components/SubscriptionsPage.jsx'
 const AccuracyPage = lazy(() => import('./components/AccuracyPage.jsx'));
 const MilestonesPage = lazy(() => import('./components/MilestonesPage.jsx'));
 const AdvancedAnalyticsPage = lazy(() => import('./components/AdvancedAnalyticsPage.jsx'));
+const MobileHome = lazy(() => import('./mobile/screens.jsx').then((m) => ({ default: m.MobileHome })));
+const MobileActivity = lazy(() => import('./mobile/screens.jsx').then((m) => ({ default: m.MobileActivity })));
+const MobileCards = lazy(() => import('./mobile/screens.jsx').then((m) => ({ default: m.MobileCards })));
+const MobileInsights = lazy(() => import('./mobile/screens.jsx').then((m) => ({ default: m.MobileInsights })));
+const MobileProfile = lazy(() => import('./mobile/screens.jsx').then((m) => ({ default: m.MobileProfile })));
+import { BottomNav } from './mobile/ui.jsx';
 import Celebration from './components/Celebration.jsx';
 import Assistant from './components/Assistant.jsx';
 import Login from './components/Login.jsx';
-import { api, clearToken, getToken, getTheme } from './services/api.js';
+import { api, clearToken, getToken, getTheme, toggleBankTheme } from './services/api.js';
 
 const NAV = [
   { section: 'Home' },
@@ -101,13 +107,21 @@ const TITLES = {
   learn: ['Learn & Tools', 'Money guides plus SIP, tax, emergency and 50/30/20 tools.'],
   security: ['Security & Privacy', 'Sessions, activity, password and account deletion.'],
   portability: ['Data Portability', 'Versioned backups, validation, restore preview and safe restore.'],
-  settings: ['Settings', 'Profile, preferences, backup and privacy.']
+  settings: ['Settings', 'Profile, preferences, backup and privacy.'],
+  mhome: ['Home', 'Your money at a glance.'],
+  mactivity: ['Activity', 'Every transaction, searchable.'],
+  mcards: ['Cards', 'Your accounts and wallets.'],
+  minsights: ['Insights', 'Spending, budgets and trends.'],
+  mprofile: ['Profile', 'You, settings and more.']
 };
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [tab, setTab] = useState('overview');
+  // Mobile-first: small screens land on the mobile Home, desktop on Overview.
+  const [tab, setTab] = useState(() => (
+    typeof window !== 'undefined' && window.innerWidth <= 900 ? 'mhome' : 'overview'
+  ));
   const [navOpen, setNavOpen] = useState(false);
   const [transactions, setTransactions] = useState([]);
   const [budgets, setBudgets] = useState({});
@@ -121,6 +135,20 @@ export default function App() {
   const [error, setError] = useState('');
   const [modalSignal, setModalSignal] = useState(0);
   const [celebration, setCelebration] = useState(null);
+  const [theme, setThemeUi] = useState(getTheme());
+
+  const applyTheme = (t) => {
+    setThemeUi(t);
+    try { localStorage.setItem('fintrack_theme', t); } catch { /* ignore */ }
+    document.documentElement.setAttribute('data-theme', t);
+    api.savePreferences({ theme: t }).catch(() => {});
+  };
+  const flipLightDark = () => applyTheme(theme === 'dark' ? 'light' : 'dark');
+  const flipBank = () => {
+    const next = toggleBankTheme();
+    setThemeUi(next);
+    api.savePreferences({ theme: next }).catch(() => {});
+  };
 
   useEffect(() => {
     const t = getTheme();
@@ -139,7 +167,9 @@ export default function App() {
       setTransactions(txns); setBudgets(b); setAccounts(a);
       setCustomCats(cats); setUpiIds(upi); setGoals(g);
       setRecurring(r); setPrefs(p);
-      if (p?.theme) {
+      if (p?.theme && ['light', 'dark', 'bank'].includes(p.theme)) {
+        setThemeUi(p.theme);
+        try { localStorage.setItem('fintrack_theme', p.theme); } catch { /* ignore */ }
         document.documentElement.setAttribute('data-theme', p.theme);
       }
     } catch (err) {
@@ -184,6 +214,9 @@ export default function App() {
   };
 
   const go = (id) => { setTab(id); setNavOpen(false); };
+  // Quick actions open the real transaction form, optionally prefilled.
+  // modalSignal stays backward compatible: a number still opens a blank form.
+  const openAdd = (preset = {}) => { go('transactions'); setModalSignal({ n: Date.now(), preset }); };
 
   if (!authChecked) return <div className="main"><div className="card">Loading…</div></div>;
   if (!user) return <Login onLogin={handleLogin} />;
@@ -217,8 +250,11 @@ export default function App() {
             <div className="who"><b>{user.name}</b><span>{user.email}</span></div>
           </div>
           <div className="side-actions">
-            <button onClick={() => { const t = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', t); try { localStorage.setItem('fintrack_theme', t); } catch {} api.savePreferences({ theme: t }).catch(() => {}); }}>
-              {document.documentElement.getAttribute('data-theme') === 'dark' ? '☀️ Light' : '🌙 Dark'}
+            <button onClick={flipLightDark} title="Switch light / dark">
+              {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+            </button>
+            <button onClick={flipBank} className={theme === 'bank' ? 'bank-on' : ''} title="Toggle premium Bank theme">
+              🏦 Bank
             </button>
             <button onClick={logout}>⎋ Logout</button>
           </div>
@@ -286,16 +322,32 @@ export default function App() {
           {tab === 'portability' && (
             <PortabilityPage />
           )}
+          {tab === 'mhome' && (
+            <MobileHome user={user} transactions={transactions} accounts={accounts} budgets={budgets} go={go} onAdd={openAdd} />
+          )}
+          {tab === 'mactivity' && (
+            <MobileActivity transactions={transactions} go={go} onAdd={openAdd} />
+          )}
+          {tab === 'mcards' && (
+            <MobileCards accounts={accounts} transactions={transactions} go={go} />
+          )}
+          {tab === 'minsights' && (
+            <MobileInsights transactions={transactions} budgets={budgets} goals={goals} recurring={recurring} go={go} />
+          )}
+          {tab === 'mprofile' && (
+            <MobileProfile user={user} go={go} onLogout={logout} />
+          )}
           {tab === 'assetsdebt' && (
             <AssetsDebtPage accounts={accounts} transactions={transactions} />
           )}
           {tab === 'settings' && (
-            <SettingsPage user={user} preferences={prefs} onPrefsChanged={setPrefs} onTheme={() => {}} onWipe={wipe} onUserChanged={setUser} onNavigate={go} />
+            <SettingsPage user={user} preferences={prefs} onPrefsChanged={setPrefs} onTheme={(t) => setThemeUi(t)} onWipe={wipe} onUserChanged={setUser} onNavigate={go} currentTheme={theme} />
           )}
           </Suspense>
         </main>
       </div>
 
+      <BottomNav tab={tab} go={go} />
       {tab !== 'transactions' && (
         <button className="fab" onClick={() => { go('transactions'); setModalSignal((s) => s + 1); }} title="Add transaction">+ Add</button>
       )}

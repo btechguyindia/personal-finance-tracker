@@ -1717,7 +1717,7 @@ app.put('/api/preferences', authMiddleware, async (req, res) => {
   let p = db.preferences.find((x) => x.userId === req.user.id);
   if (!p) { p = { userId: req.user.id }; db.preferences.push(p); }
   const { theme, currency, timezone, fyStartMonth } = req.body || {};
-  if (theme && ['light', 'dark'].includes(theme)) p.theme = theme;
+  if (theme && ['light', 'dark', 'bank'].includes(theme)) p.theme = theme;
   if (currency) p.currency = String(currency).slice(0, 8);
   if (timezone) p.timezone = String(timezone).slice(0, 64);
   if (fyStartMonth && Number(fyStartMonth) >= 1 && Number(fyStartMonth) <= 12) p.fyStartMonth = Number(fyStartMonth);
@@ -2473,7 +2473,7 @@ app.post('/api/portability/restore', authMiddleware, async (req, res) => {
   if (Object.keys(p).length) {
     let pref = db.preferences.find((x) => x.userId === req.user.id);
     if (!pref) { pref = { userId: req.user.id }; db.preferences.push(pref); }
-    if (['light', 'dark'].includes(p.theme)) pref.theme = p.theme;
+    if (['light', 'dark', 'bank'].includes(p.theme)) pref.theme = p.theme;
     if (p.currency) pref.currency = String(p.currency).slice(0, 8);
     if (p.timezone) pref.timezone = String(p.timezone).slice(0, 64);
     if (Number(p.fyStartMonth) >= 1 && Number(p.fyStartMonth) <= 12) pref.fyStartMonth = Number(p.fyStartMonth);

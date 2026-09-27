@@ -102,6 +102,28 @@ export default function Login({ onLogin }) {
             <li><span className="tick">✓</span> CSV import with duplicate detection — HDFC / SBI / ICICI presets</li>
             <li><span className="tick">✓</span> Budgets, savings goals &amp; auto-posted recurring payments</li>
           </ul>
+          {/* Bank-theme-only floating preview cards (pure illustration) */}
+          <div className="bank-float" aria-hidden="true">
+            <div className="bf-card bf-balance">
+              <div className="bf-label">Total balance</div>
+              <div className="bf-value">₹4,82,300</div>
+              <div className="bf-delta">▲ +2.4% this month</div>
+            </div>
+            <div className="bf-card bf-spend">
+              <div className="bf-label">Monthly spending</div>
+              <div className="bf-bars">
+                <i style={{ height: '32%' }} /><i style={{ height: '48%' }} />
+                <i style={{ height: '40%' }} /><i className="hot" style={{ height: '72%' }} />
+                <i style={{ height: '55%' }} /><i style={{ height: '64%' }} />
+                <i style={{ height: '44%' }} />
+              </div>
+            </div>
+            <div className="bf-card bf-save">
+              <div className="bf-label">Emergency fund</div>
+              <div className="bf-ring"><span>72%</span></div>
+            </div>
+            <div className="bf-caption">Illustrative preview</div>
+          </div>
         </div>
         <div className="muted small" style={{ color: '#8fa0ba' }}>Asia/Kolkata · ₹ INR · Your data stays in your database</div>
       </div>

@@ -4,7 +4,7 @@ import { api, getTheme, getToken, setTheme } from '../services/api.js';
 export const AVATAR_EMOJI = ['😀', '😎', '🦊', '🐼', '🦁', '🐸', '🦄', '🐝', '🌟', '⚡', '💎', '🚀', '🌈', '🍀', '🔥', '💰'];
 export const AVATAR_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444', '#14b8a6', '#6366f1'];
 
-export default function SettingsPage({ user, preferences, onPrefsChanged, onTheme, onWipe, onUserChanged, onNavigate }) {
+export default function SettingsPage({ user, preferences, onPrefsChanged, onTheme, onWipe, onUserChanged, onNavigate, currentTheme }) {
   const [name, setName] = useState(user?.name || '');
   const [emoji, setEmoji] = useState(user?.avatar?.emoji || '😀');
   const [color, setColor] = useState(user?.avatar?.color || '#3b82f6');
@@ -12,7 +12,8 @@ export default function SettingsPage({ user, preferences, onPrefsChanged, onThem
   const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
-  const [theme, setThemeState] = useState(getTheme());
+  const [theme, setThemeState] = useState(currentTheme || getTheme());
+  useEffect(() => { if (currentTheme) setThemeState(currentTheme); }, [currentTheme]);
   const [accounts, setAccounts] = useState([]);
   const [csvAccount, setCsvAccount] = useState('');
   const [history, setHistory] = useState([]);
@@ -41,6 +42,9 @@ export default function SettingsPage({ user, preferences, onPrefsChanged, onThem
   const changeTheme = (t) => {
     setThemeState(t);
     setTheme(t);
+    if (t !== 'bank') {
+      try { localStorage.setItem('fintrack_theme_classic', t); } catch { /* ignore */ }
+    }
     document.documentElement.setAttribute('data-theme', t);
     onTheme(t);
     setPref({ theme: t });
@@ -193,8 +197,9 @@ export default function SettingsPage({ user, preferences, onPrefsChanged, onThem
           <div className="seg">
             <button className={theme === 'light' ? 'on' : ''} onClick={() => changeTheme('light')}>☀️ Light</button>
             <button className={theme === 'dark' ? 'on' : ''} onClick={() => changeTheme('dark')}>🌙 Dark</button>
+            <button className={theme === 'bank' ? 'on' : ''} onClick={() => changeTheme('bank')}>🏦 Bank</button>
           </div>
-          <p className="muted small">Theme is saved to your preferences and this device.</p>
+          <p className="muted small">Theme is saved to your preferences and this device. Bank is the premium blue-green fintech theme.</p>
         </div>
         <div className="card">
           <div className="card-head"><h3>Regional</h3></div>

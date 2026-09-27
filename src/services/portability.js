@@ -194,7 +194,7 @@ export function validatePreferences(p) {
   const errors = [];
   if (p === null || p === undefined) return [];
   if (typeof p !== 'object') return ['not an object'];
-  if (p.theme !== undefined && !['light', 'dark'].includes(p.theme)) errors.push('bad theme');
+  if (p.theme !== undefined && !['light', 'dark', 'bank'].includes(p.theme)) errors.push('bad theme');
   if (p.fyStartMonth !== undefined && !(Number(p.fyStartMonth) >= 1 && Number(p.fyStartMonth) <= 12)) errors.push('bad fyStartMonth');
   return errors;
 }
