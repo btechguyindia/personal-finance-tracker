@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { CATEGORIES, SUBCATEGORIES, PAYMENT_METHODS } from '../services/analyticsService.js';
 import { formatINR } from '../services/finance.js';
-import { BANK_PRESETS, parseStatement } from '../services/statementParsers.js';
+import { BANK_PRESETS, parseStatement, parseCSVTable } from '../services/statementParsers.js';
 import { normalizeImportRow } from '../services/importNormalize.js';
 import { api } from '../services/api.js';
 
@@ -155,6 +155,25 @@ export default function TransactionsPage({ transactions, accounts, onChanged, mo
     URL.revokeObjectURL(a.href);
   };
 
+  const downloadSampleCSV = () => {
+    const head = ['date', 'type', 'amount', 'category', 'subcategory', 'paymentMethod', 'account', 'accountFrom', 'accountTo', 'merchant', 'description', 'upiRef', 'status'];
+    const rows = [
+      ['2026-09-05', 'expense', '250', 'Food', 'Groceries', 'UPI', 'HDFC Savings', '', '', 'BigBasket', 'Weekly groceries', '', 'completed'],
+      ['2026-09-06', 'income', '85000', 'Salary', 'Monthly pay', 'Bank transfer', 'SBI Salary', '', '', 'Employer', 'September salary', '', 'completed'],
+      ['2026-09-07', 'transfer', '20000', 'Transfer', '', 'Bank transfer', '', 'SBI Salary', 'HDFC Savings', 'Self transfer', 'Monthly savings move', '', 'completed'],
+      ['2026-09-08', 'refund', '500', 'Food', 'Restaurants', 'UPI', 'HDFC Savings', '', '', 'Zomato', 'Order refund', '417788990011', 'completed'],
+      ['2026-09-09', 'expense', '1200', 'Housing', 'Electricity', 'UPI', 'HDFC Savings', '', '', 'BESCOM', 'Power bill', '', 'completed']
+    ];
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = [head.join(','), ...rows.map((r) => r.map(esc).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'fintrack-sample-import.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   const onFile = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -171,11 +190,23 @@ export default function TransactionsPage({ transactions, accounts, onChanged, mo
           account: importAccount || (accounts[0] || {}).name || 'Cash Wallet'
         });
         if (parsed.rows.length > 0) {
-          rows = parsed.rows.map((r) => ({
-            ...r,
-            account: r.account || importAccount || (accounts[0] || {}).name || 'Cash Wallet'
-          }));
-          detected = `Detected ${parsed.bank.toUpperCase()} layout — `;
+          // Bank presets emit bank vocabulary — run every row through the
+          // same normalizer as generic CSVs (debit→expense, SUCCESS→
+          // completed, bare account numbers→description) so the preview
+          // always shows ledger-ready rows, even against an older server.
+          rows = parsed.rows.map((r) => {
+            const norm = normalizeImportRow(r);
+            const row = norm.row;
+            return {
+              ...row,
+              account: row.account || importAccount || (accounts[0] || {}).name || 'Cash Wallet'
+            };
+          });
+          // parseUPI drops failed/cancelled rows (no money moved) — say so.
+          const rawCount = parseCSVTable(text).rows.length;
+          const dropped = rawCount - parsed.rows.length;
+          detected = `Detected ${parsed.bank.toUpperCase()} layout — ` +
+            (dropped > 0 ? `${dropped} failed/cancelled row(s) skipped (no money moved). ` : '');
         }
       } catch { /* fall through to generic */ }
     } else {
@@ -234,6 +265,7 @@ export default function TransactionsPage({ transactions, accounts, onChanged, mo
             {accounts.map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
           </select>
           <button className="btn" onClick={() => fileRef.current?.click()}>⬆ Import statement</button>
+          <button className="btn" onClick={downloadSampleCSV} title="Download a correctly-formatted example CSV">📄 Sample CSV</button>
           <input ref={fileRef} type="file" accept=".csv" style={{ display: 'none' }} onChange={onFile} />
         </div>
         {error && <div className="error" style={{ marginTop: 8 }}>{error}</div>}

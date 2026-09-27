@@ -1346,6 +1346,10 @@ import {
   isUnusualAmount, budgetBreaches, monthSummary, previousMonthPrefix,
   idempotencyKey
 } from './src/services/autopilotEngine.js';
+import {
+  BACKUP_FORMAT, BACKUP_VERSION, normalizeBackup, validateBackupData,
+  summarizeBackup, buildAccountCsv, RESTORE_REPLACE_PHRASE
+} from './src/services/portability.js';
 
 const RUNS_CAP = 500;
 const NOTIF_CAP = 200;
@@ -1681,8 +1685,7 @@ app.get('/api/export', authMiddleware, async (req, res) => {
   });
 });
 
-app.delete('/api/account/data', authMiddleware, async (req, res) => {
-  const id = req.user.id;
+app.delete('/api/account/data', authMiddleware, async (req, res) => {  const id = req.user.id;
   for (const k of ['transactions', 'budgets', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'resets', 'autopilotRules', 'autopilotRuns', 'notifications', 'securityEvents', 'imports']) {
     db[k] = db[k].filter((x) => x.userId !== id);
   }

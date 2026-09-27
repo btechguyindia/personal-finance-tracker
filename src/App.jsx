@@ -1,62 +1,69 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import AnalyticsPage from './components/AnalyticsPage.jsx';
-import TransactionsPage from './components/TransactionsPage.jsx';
-import BudgetsPage from './components/BudgetsPage.jsx';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+// Code-split: only the landing page (Overview) + shell load upfront.
+// Every other tab loads on demand — this keeps first paint fast despite
+// 27 pages and heavy chart/export libraries (recharts, xlsx, jspdf).
 import OverviewPage from './components/OverviewPage.jsx';
-import AccountsPage from './components/AccountsPage.jsx';
-import CategoriesPage from './components/CategoriesPage.jsx';
-import UpiPage from './components/UpiPage.jsx';
-import GoalsPage from './components/GoalsPage.jsx';
-import RecurringPage from './components/RecurringPage.jsx';
-import CalculatorsPage from './components/CalculatorsPage.jsx';
-import AutopilotPage from './components/AutopilotPage.jsx';
-import TipsPage from './components/TipsPage.jsx';
-import TrendsPage from './components/TrendsPage.jsx';
-import LearnToolsPage from './components/LearnToolsPage.jsx';
-import SettingsPage from './components/SettingsPage.jsx';
-import SecurityPage from './components/SecurityPage.jsx';
-import CommandCenterPage from './components/CommandCenterPage.jsx';
-import CashflowPage from './components/CashflowPage.jsx';
-import BucketsPage from './components/BucketsPage.jsx';
-import DetectivePage from './components/DetectivePage.jsx';
-import HeatmapPage from './components/HeatmapPage.jsx';
-import PurchaseLabPage from './components/PurchaseLabPage.jsx';
-import AnalystPage from './components/AnalystPage.jsx';
-import SubscriptionsPage from './components/SubscriptionsPage.jsx';
-import AccuracyPage from './components/AccuracyPage.jsx';
-import MilestonesPage from './components/MilestonesPage.jsx';
-import AdvancedAnalyticsPage from './components/AdvancedAnalyticsPage.jsx';
+const AnalyticsPage = lazy(() => import('./components/AnalyticsPage.jsx'));
+const TransactionsPage = lazy(() => import('./components/TransactionsPage.jsx'));
+const BudgetsPage = lazy(() => import('./components/BudgetsPage.jsx'));
+const AccountsPage = lazy(() => import('./components/AccountsPage.jsx'));
+const CategoriesPage = lazy(() => import('./components/CategoriesPage.jsx'));
+const UpiPage = lazy(() => import('./components/UpiPage.jsx'));
+const GoalsPage = lazy(() => import('./components/GoalsPage.jsx'));
+const RecurringPage = lazy(() => import('./components/RecurringPage.jsx'));
+const CalculatorsPage = lazy(() => import('./components/CalculatorsPage.jsx'));
+const AutopilotPage = lazy(() => import('./components/AutopilotPage.jsx'));
+const TipsPage = lazy(() => import('./components/TipsPage.jsx'));
+const TrendsPage = lazy(() => import('./components/TrendsPage.jsx'));
+const LearnToolsPage = lazy(() => import('./components/LearnToolsPage.jsx'));
+const SettingsPage = lazy(() => import('./components/SettingsPage.jsx'));
+const SecurityPage = lazy(() => import('./components/SecurityPage.jsx'));
+const CommandCenterPage = lazy(() => import('./components/CommandCenterPage.jsx'));
+const CashflowPage = lazy(() => import('./components/CashflowPage.jsx'));
+const BucketsPage = lazy(() => import('./components/BucketsPage.jsx'));
+const DetectivePage = lazy(() => import('./components/DetectivePage.jsx'));
+const HeatmapPage = lazy(() => import('./components/HeatmapPage.jsx'));
+const PurchaseLabPage = lazy(() => import('./components/PurchaseLabPage.jsx'));
+const AnalystPage = lazy(() => import('./components/AnalystPage.jsx'));
+const SubscriptionsPage = lazy(() => import('./components/SubscriptionsPage.jsx'));
+const AccuracyPage = lazy(() => import('./components/AccuracyPage.jsx'));
+const MilestonesPage = lazy(() => import('./components/MilestonesPage.jsx'));
+const AdvancedAnalyticsPage = lazy(() => import('./components/AdvancedAnalyticsPage.jsx'));
 import Celebration from './components/Celebration.jsx';
 import Assistant from './components/Assistant.jsx';
 import Login from './components/Login.jsx';
 import { api, clearToken, getToken, getTheme } from './services/api.js';
 
 const NAV = [
+  { section: 'Home' },
   { id: 'command', label: 'Command Center', ico: '🎛️' },
   { id: 'overview', label: 'Overview', ico: '🏠' },
-  { id: 'cashflow', label: 'Cash Flow', ico: '🔮' },
-  { id: 'buckets', label: 'Buckets', ico: '🪣' },
   { id: 'transactions', label: 'Transactions', ico: '🧾' },
-  { id: 'detective', label: 'Detective', ico: '🕵️' },
-  { id: 'heatmap', label: 'Heatmap', ico: '🗓️' },
-  { id: 'purchaselab', label: 'Purchase Lab', ico: '🧪' },
-  { id: 'analyst', label: 'AI Analyst', ico: '🤖' },
-  { id: 'subs', label: 'Subscriptions', ico: '📡' },
-  { id: 'accuracy', label: 'Accuracy', ico: '🎯' },
-  { id: 'milestones', label: 'Milestones', ico: '🏆' },
-  { id: 'advanced', label: 'Advanced', ico: '🧬' },
-  { id: 'accounts', label: 'Accounts & Wallets', ico: '🏦' },
+  { id: 'cashflow', label: 'Cash Flow', ico: '🔮' },
+  { section: 'Plan ahead' },
   { id: 'budgets', label: 'Budgets', ico: '🎯' },
-  { id: 'categories', label: 'Categories', ico: '🏷️' },
-  { id: 'upi', label: 'UPI', ico: '📱' },
   { id: 'goals', label: 'Savings Goals', ico: '🐷' },
-  { id: 'reports', label: 'Reports & Analytics', ico: '📊' },
   { id: 'recurring', label: 'Recurring', ico: '🔁' },
+  { id: 'buckets', label: 'Buckets', ico: '🪣' },
+  { id: 'milestones', label: 'Milestones', ico: '🏆' },
+  { id: 'purchaselab', label: 'Purchase Lab', ico: '🧪' },
   { id: 'calculators', label: 'Calculators', ico: '🧮' },
   { id: 'autopilot', label: 'Autopilot', ico: '✈️' },
-  { id: 'tips', label: 'Tips & Suggestions', ico: '💡' },
+  { section: 'Understand' },
+  { id: 'reports', label: 'Reports & Analytics', ico: '📊' },
   { id: 'trends', label: 'Trends & Health', ico: '📈' },
+  { id: 'heatmap', label: 'Heatmap', ico: '🗓️' },
+  { id: 'advanced', label: 'Advanced', ico: '🧬' },
+  { id: 'detective', label: 'Detective', ico: '🕵️' },
+  { id: 'accuracy', label: 'Accuracy', ico: '🔎' },
+  { id: 'analyst', label: 'AI Analyst', ico: '🤖' },
+  { id: 'tips', label: 'Tips & Suggestions', ico: '💡' },
   { id: 'learn', label: 'Learn & Tools', ico: '📚' },
+  { section: 'Manage' },
+  { id: 'accounts', label: 'Accounts & Wallets', ico: '🏦' },
+  { id: 'categories', label: 'Categories', ico: '🏷️' },
+  { id: 'upi', label: 'UPI', ico: '📱' },
+  { id: 'subs', label: 'Subscriptions', ico: '📡' },
   { id: 'security', label: 'Security & Privacy', ico: '🛡️' },
   { id: 'settings', label: 'Settings', ico: '⚙️' }
 ];
@@ -184,10 +191,14 @@ export default function App() {
       <aside className={`sidebar${navOpen ? ' open' : ''}`}>
         <div className="brand"><span className="mark">₹</span><div>FinTrack<small>Personal finance wallet</small></div></div>
         <nav className="nav">
-          {NAV.map((n) => (
-            <button key={n.id} className={tab === n.id ? 'on' : ''} onClick={() => go(n.id)}>
-              <span className="ico">{n.ico}</span> {n.label}
-            </button>
+          {NAV.map((n, i) => (
+            n.section
+              ? <div key={`sec-${i}`} className="section">{n.section}</div>
+              : (
+                <button key={n.id} className={tab === n.id ? 'on' : ''} onClick={() => go(n.id)}>
+                  <span className="ico">{n.ico}</span> {n.label}
+                </button>
+              )
           ))}
         </nav>
         <div className="side-foot">
@@ -221,6 +232,7 @@ export default function App() {
         <main className="main">
           {error && <div className="card"><div className="error">{error}</div></div>}
           {loading && <div className="muted small">Loading your data…</div>}
+          <Suspense fallback={<div className="card"><div className="muted">Loading page…</div></div>}>
           {tab === 'command' && <CommandCenterPage transactions={transactions} accounts={accounts} budgets={budgets} recurring={recurring} goals={goals} />}
           {tab === 'cashflow' && <CashflowPage transactions={transactions} accounts={accounts} recurring={recurring} />}
           {tab === 'buckets' && <BucketsPage />}
@@ -268,6 +280,7 @@ export default function App() {
           {tab === 'settings' && (
             <SettingsPage user={user} preferences={prefs} onPrefsChanged={setPrefs} onTheme={() => {}} onWipe={wipe} onUserChanged={setUser} onNavigate={go} />
           )}
+          </Suspense>
         </main>
       </div>
 
