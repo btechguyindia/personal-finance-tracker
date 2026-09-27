@@ -159,7 +159,7 @@ body::before {
   .table-wrap table { font-size: 13.5px; }
   .table-wrap th, .table-wrap td { padding: 12px 10px; }
   .table-wrap td.num, .table-wrap th.num { font-variant-numeric: tabular-nums; }
-  .input, select { min-height: 44px; font-size: 15px; }
+  .input, select, textarea { min-height: 44px; font-size: 16px; } /* 16px stops iOS auto-zoom on focus */
   .modal { margin: 12px; max-height: calc(100vh - 24px); overflow-y: auto; }
 }
 
