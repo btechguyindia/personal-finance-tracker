@@ -18,6 +18,10 @@ export function setTheme(t) {
   try { localStorage.setItem(THEME_KEY, t); } catch { /* ignore */ }
 }
 
+// Conflict contract (Milestone 2): a 409 VERSION_CONFLICT means another writer
+// committed first and NOTHING was written. Callers must refresh the relevant
+// data and ask the user to retry deliberately — never auto-retry a request
+// that could move money twice (use idempotencyKey for safe client retries).
 async function request(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   const token = getToken();
@@ -25,7 +29,12 @@ async function request(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers });
   let data = null;
   try { data = await res.json(); } catch { data = null; }
-  if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error((data && data.error) || `Request failed (${res.status})`);
+    err.status = res.status;
+    if (data && data.code) err.code = data.code;
+    throw err;
+  }
   return data;
 }
 

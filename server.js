@@ -2,14 +2,21 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import express from 'express';
 import { normalizeImportRow } from './src/services/importNormalize.js';
+import { VersionConflictError } from './lib/neon.js';
 
 const isNeon = !!process.env.DATABASE_URL;
 let neonMod = null;
 if (isNeon) {
   neonMod = await import('./lib/neon.js');
 }
+
+// Request-scoped store for the concurrency guard ({ guarded: true } inside a
+// guarded mutating request). Lets save() throw a catchable conflict instead
+// of hanging on Express 4 async handlers, and makes the guard re-entrant.
+const requestStore = new AsyncLocalStorage();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -104,13 +111,19 @@ function saveDb(db) {
 }
 
 let db = loadDb();
+// Version of the document this process last read (Neon only). Every save
+// echoes it; the database rejects the write if a newer version exists.
+let dbVersion = null;
+let dbUpdatedAt = null;
 async function refreshDbFromNeon() {
   if (!isNeon) return;
   try {
-    const remote = await neonMod.loadFromNeon(emptyDb);
+    const { data: remote, version, updatedAt } = await neonMod.loadDoc(emptyDb);
     db = { ...emptyDb(), ...remote };
     for (const k of Object.keys(emptyDb())) if (!Array.isArray(db[k])) db[k] = [];
     migrateSessions(db);
+    dbVersion = version;
+    dbUpdatedAt = updatedAt;
   } catch (e) {
     console.error('Neon load failed, using in-memory db:', e?.message || e);
   }
@@ -118,14 +131,37 @@ async function refreshDbFromNeon() {
 const save = async () => {
   if (isNeon) {
     try {
-      await neonMod.saveToNeon(db);
-      return;
+      const r = await neonMod.saveDoc(db, dbVersion ?? 1);
+      dbVersion = r.version;
+      return { ok: true, version: dbVersion };
     } catch (e) {
+      if (e && e.code === 'VERSION_CONFLICT') {
+        // Another writer committed first. Adopt the latest state so this
+        // process never serves stale data; guarded route handlers convert
+        // this into HTTP 409 (never a silent overwrite, never a silent drop
+        // presented as success — see the concurrency guard below).
+        await refreshDbFromNeon();
+        if (requestStore.getStore()?.guarded) throw e;
+        console.error(`unguarded save conflict (adopted v${dbVersion}); background write skipped, will retry on next request`);
+        return { ok: false, conflict: true };
+      }
       console.error('Neon save failed, falling back to file:', e?.message || e);
     }
   }
   try { saveDb(db); } catch { /* ephemeral fs on serverless — ignore */ }
+  return { ok: true, version: dbVersion };
 };
+
+// Per-process write mutex: serializes mutating requests inside one instance
+// so interleaved awaits can never produce a lost update locally. Cross
+// instance protection comes from the versioned conditional write above.
+let writeChain = Promise.resolve();
+function acquireWriteLock() {
+  let release;
+  const prev = writeChain;
+  writeChain = new Promise((r) => { release = r; });
+  return prev.then(() => release);
+}
 const uid = (p) => p + crypto.randomBytes(8).toString('hex');
 
 import { SECURITY_EVENT_CAP, capList, coarseDevice } from './src/services/security.js';
@@ -413,6 +449,7 @@ function toClientTx(t) {
     status: t.status || 'completed',
     source: t.source || 'manual',
     isCreditCardRepayment: !!t.isCreditCardRepayment,
+    idempotencyKey: t.idempotencyKey || null,
     createdAt: t.createdAt, updatedAt: t.updatedAt
   };
 }
@@ -735,7 +772,16 @@ app.get('/api/transactions', authMiddleware, async (req, res) => {
 app.post('/api/transactions', authMiddleware, async (req, res) => {
   const errors = validateTransaction(req.body || {});
   if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+  // Optional client idempotency key: a retried POST with the same key returns
+  // the ORIGINAL transaction instead of posting a duplicate. Keys are scoped
+  // per user and never reused across users.
+  const idemKey = typeof req.body.idempotencyKey === 'string' ? req.body.idempotencyKey.trim().slice(0, 80) : '';
+  if (idemKey) {
+    const prior = db.transactions.find((t) => t.userId === req.user.id && t.idempotencyKey === idemKey);
+    if (prior) return res.json({ transaction: toClientTx(prior), idempotentReplay: true });
+  }
   const tx = buildTx(req.user.id, req.body);
+  if (idemKey) tx.idempotencyKey = idemKey;
   db.transactions.push(tx);
   audit(req.user.id, 'create', 'transaction', tx.id, `${tx.type} ${tx.date} ${toRupees(tx.amountPaise)}`);
   await save();
@@ -2155,12 +2201,86 @@ app.delete('/api/account/data', authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Storage status (reliability diagnostics) ──
+// Read-only: which backing store is live, which document version this
+// process last read, and per-user record counts. Used to verify migrations
+// and to confirm writer/reader agreement after deploys.
+app.get('/api/storage/status', authMiddleware, async (req, res) => {
+  const counts = {};
+  for (const k of Object.keys(emptyDb())) {
+    if (k === 'users' || k === 'sessions') continue;
+    counts[k] = db[k].filter((x) => x && x.userId === req.user.id).length;
+  }
+  res.json({ neon: isNeon, version: dbVersion, updatedAt: dbUpdatedAt, counts });
+});
+
 // ── Static frontend ──
 // JSON 404 for unknown /api/* routes on ANY method (Express's default is an
 // HTML page, which the frontend cannot parse — surfacing as bare "Request
 // failed (404)"). Must sit after all API routes, before static + SPA fallback.
 app.all('/api/*', (req, res) => {
   res.status(404).json({ error: `Unknown API route: ${req.method} ${req.path}` });
+});
+
+// ── Concurrency guard (Milestone 2) ─────────────────────────────────────
+// Installed once, after all routes are registered. Every mutating route
+// handler runs serialized per instance on a freshly reloaded document, and a
+// version conflict surfaces as HTTP 409 — never a silent overwrite, never a
+// hung request (Express 4 does not catch async throws, so every handler also
+// gets try/catch → next(err) here).
+// - Re-entrant via AsyncLocalStorage (nested saves / autopilot hooks safe).
+// - Session re-verified against the fresh snapshot, so a concurrent revoke
+//   wins the race against an in-flight write.
+// - Zero per-route edits: future mutating routes are covered automatically.
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
+for (const layer of app._router.stack) {
+  if (!layer.route) continue;
+  const methods = Object.keys(layer.route.methods || {}).filter((m) => layer.route.methods[m]);
+  const mutating = methods.some((m) => MUTATING_METHODS.has(m.toUpperCase()));
+  for (const sub of layer.route.stack) {
+    if (typeof sub.handle !== 'function' || sub.handle.__fintrackGuarded) continue;
+    const orig = sub.handle;
+    const wrapped = async function (req, res, next) {
+      try {
+        if (mutating && !requestStore.getStore()) {
+          const release = await acquireWriteLock();
+          try {
+            await requestStore.run({ guarded: true }, async () => {
+              await refreshDbFromNeon();
+              if (req.user && req.sessionId) {
+                const s = db.sessions.find((x) => x.id === req.sessionId && x.userId === req.user.id);
+                if (!s) { res.status(401).json({ error: 'Session expired — please log in again' }); return; }
+                const u = db.users.find((x) => x.id === req.user.id);
+                if (!u) { res.status(401).json({ error: 'User not found' }); return; }
+                req.user = u;
+              }
+              await orig.call(this, req, res, next);
+            });
+          } finally { release(); }
+        } else {
+          await orig.call(this, req, res, next);
+        }
+      } catch (e) { next(e); }
+    };
+    wrapped.__fintrackGuarded = true;
+    sub.handle = wrapped;
+  }
+}
+
+// Registered after all routes: maps version conflicts to HTTP 409 and
+// guarantees JSON errors (the earlier entity.* handler only sees body-parser
+// failures, which happen before the routes).
+app.use((err, req, res, next) => {
+  if (err && (err.code === 'VERSION_CONFLICT' || err instanceof VersionConflictError)) {
+    if (!res.headersSent) {
+      return res.status(409).json({
+        code: 'VERSION_CONFLICT',
+        error: 'Your data changed elsewhere just now — nothing was written. Refresh and retry; no money was moved twice.'
+      });
+    }
+    return;
+  }
+  next(err);
 });
 
 app.use(express.static(path.join(__dirname, 'dist')));

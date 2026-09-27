@@ -194,6 +194,46 @@ tablet → mobile with collapsible sidebar.
   Validate/preview/restore are rate-limited (best-effort in-memory, per
   serverless instance, like login limits).
 
+## Database reliability — concurrency & recovery (FinTrack 3.0 · Phase 3.5)
+
+- **Design choice: optimistic concurrency first (Option A).** The store is one
+  JSON document (`fintrack_store.key='main'`); it now carries a monotonic
+  `version` column (additive `ALTER TABLE … ADD COLUMN IF NOT EXISTS`, old
+  rows default to v1, old code ignores the column → rollback-safe). Every
+  Neon write is compare-and-swap (`UPDATE … WHERE key AND version`,
+  bump atomically); a mismatch is rejected, never silently overwritten.
+- **No blind last-write-wins:** all mutating routes run through a central
+  guard (installed once, zero per-route edits, future routes covered): a
+  per-instance write mutex serializes requests, each request reloads a fresh
+  snapshot, sessions are re-verified post-reload (a concurrent revoke wins),
+  and every handler is wrapped so async throws become JSON errors, not hangs.
+- **Conflict contract:** a lost race returns **HTTP 409
+  `{code: VERSION_CONFLICT}`** — nothing was written. The client surfaces
+  `err.code`/`err.status`; callers must refresh and ask the user to retry
+  deliberately. Money-moving requests are never auto-retried.
+- **Idempotency:** `POST /api/transactions` accepts `idempotencyKey` (per
+  user) — a retried POST returns the original (`idempotentReplay: true`)
+  instead of duplicating. Import confirm already dedups on its key; a
+  same-key race resolves to one import + one deduped answer via the 409 path.
+- **Diagnostics:** `GET /api/storage/status` (auth) reports store kind,
+  document version, timestamp and per-user counts — used to verify migrations
+  and writer/reader agreement after deploys.
+- **Migration safety:** additive schema only; pre-migration backup via the
+  Portability Center; dry run via validate/preview; counts via storage
+  status; rollback = redeploy previous build (old code reads new rows fine).
+- **Honest limits:** rate limits and the write mutex are per serverless
+  instance (documented, not distributed); replace-mode restore stays
+  wipe-then-insert (not atomic); no point-in-time recovery is claimed —
+  enable Neon point-in-time restore / branching manually if needed. The
+  credible next step is **normalized per-collection tables** (schema sketched
+  in `db/schema.sql`); the version column migrates with it as a
+  fencing token during cutover.
+- **Tests:** `tests/reliability.test.mjs` — CAS semantics vs a faithful
+  in-memory PG double (overlap → exactly one winner + `VERSION_CONFLICT`;
+  retry-after-refresh merges cleanly), plus live concurrency/idempotency/
+  race tests on an isolated server. Disclosed gap: no live-Neon concurrency
+  test (no isolated Neon test DB configured).
+
 ## Data-accuracy rules
 - Transfers (incl. credit-card repayments) are **excluded** from
   income/expense and never change net worth.
