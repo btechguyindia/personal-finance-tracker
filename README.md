@@ -103,6 +103,9 @@ and land as `scheduled` transactions with `source: 'autopilot'`.
     per-account CSV, backup-history registry, server-side validation,
     restore preview (added/replaced/removed/conflicts/balance effect) and
     merge/replace restore with password + phrase safeguards.
+17. **Assets & Debt** — net-worth dashboard, asset register with valuation
+    history, liabilities with amortization + payoff-scenario planner and
+    explicit loan-payment recording (one transfer, no double count).
 
 Global **+ Add** floating button, light/dark mode, responsive desktop →
 tablet → mobile with collapsible sidebar.
@@ -233,6 +236,38 @@ tablet → mobile with collapsible sidebar.
   retry-after-refresh merges cleanly), plus live concurrency/idempotency/
   race tests on an isolated server. Disclosed gap: no live-Neon concurrency
   test (no isolated Neon test DB configured).
+
+## Assets & Debt (FinTrack 3.0 · Phase 4)
+
+- **Workspace** (sidebar → ⚖️): net-worth summary (assets, liabilities, net
+  worth, debt-to-asset, completeness + estimate flags), asset allocation and
+  debt mix, asset register, liability schedule/scenario/payment flows.
+- **Assets** (`/api/assets`): cash, bank, fixed deposit, investment, gold,
+  property, vehicle, other. Manual estimates are labelled estimates (never
+  market prices); valuations are append-only history (latest date wins —
+  backfills stay historical); linked accounts use the LIVE ledger balance as
+  the single source of truth (entered value ignored, never added twice, and
+  a broken link falls back with a flag).
+- **Liabilities** (`/api/liabilities`): personal/education/home/vehicle
+  loans, credit-card*, other debt. Principal, outstanding, rate (0–100),
+  EMI, monthly frequency only (documented limit), next-due and maturity
+  dates validated. `*` Credit-card liabilities are EXCLUDED from totals —
+  card debt is tracked via card accounts (bill payments stay transfers).
+- **Engine** (`src/services/loans.js`, paise-exact): reducing-balance
+  monthly rests reusing the Calculators formula; extra-monthly and one-time
+  prepayments; payoff date, interest saved, unpayable-EMI detection (never
+  an infinite loop); every scenario ships visible assumptions. Simulations
+  never touch the ledger — recording a payment is an explicit POST that
+  writes exactly one transfer + reduces outstanding (principal slice only).
+- **Net worth = assets − liabilities**, with stale-valuation (>90d) and
+  estimate-share flags; status reads complete / partial, never implied full.
+- **Portability:** assets + liabilities are exported, validated, previewed
+  and merged/replaced like every other collection (old backups restore
+  cleanly — new collections default to empty).
+- **Tests:** `tests/assets.test.mjs` — engine cross-checked against the
+  existing EMI calculator, zero-interest/rounding/early-payoff/unpayable
+  edges, net-worth double-count guards, plus live CRUD/isolation/payment/
+  portability tests on isolated users.
 
 ## Data-accuracy rules
 - Transfers (incl. credit-card repayments) are **excluded** from

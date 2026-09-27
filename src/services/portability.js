@@ -18,7 +18,8 @@ export const RESTORE_REPLACE_PHRASE = 'REPLACE ALL MY DATA';
 export const PORTABLE_COLLECTIONS = [
   'transactions', 'accounts', 'budgets', 'categories', 'upiIds',
   'goals', 'contributions', 'recurring', 'imports',
-  'autopilotRules', 'autopilotRuns', 'notifications', 'preferences'
+  'autopilotRules', 'autopilotRuns', 'notifications',
+  'assets', 'liabilities', 'preferences'
 ];
 
 // Reference sets mirror server.js validation (kept local so this module
@@ -84,6 +85,42 @@ export function validateBackupNotification(r) {
   return [];
 }
 
+const ASSET_KINDS = ['cash', 'bank', 'fixed_deposit', 'investment', 'gold', 'property', 'vehicle', 'other'];
+const LIABILITY_KINDS = ['personal_loan', 'education_loan', 'home_loan', 'vehicle_loan', 'credit_card', 'other_debt'];
+
+export function validateBackupAsset(r) {
+  const errors = [];
+  if (!r || typeof r !== 'object') return ['not an object'];
+  if (!s(r.name, 80)) errors.push('name is required');
+  if (!ASSET_KINDS.includes(r.type)) errors.push(`type must be ${ASSET_KINDS.join(' | ')}`);
+  if (r.value !== undefined && (!Number.isFinite(Number(r.value)) || Number(r.value) < 0)) errors.push('value must be >= 0');
+  if (r.purchaseDate !== undefined && r.purchaseDate !== null && !DATE_RE.test(String(r.purchaseDate))) errors.push('purchaseDate must be YYYY-MM-DD');
+  if (r.valuationDate !== undefined && r.valuationDate !== null && !DATE_RE.test(String(r.valuationDate))) errors.push('valuationDate must be YYYY-MM-DD');
+  if (Array.isArray(r.valuations)) {
+    r.valuations.forEach((v, i) => {
+      if (!v || !DATE_RE.test(String(v.date))) errors.push(`valuations[${i}]: bad date`);
+      else if (v.value !== undefined && (!Number.isFinite(Number(v.value)) || Number(v.value) < 0)) errors.push(`valuations[${i}]: value must be >= 0`);
+    });
+  }
+  return errors;
+}
+
+export function validateBackupLiability(r) {
+  const errors = [];
+  if (!r || typeof r !== 'object') return ['not an object'];
+  if (!s(r.name, 80)) errors.push('name is required');
+  if (!LIABILITY_KINDS.includes(r.type)) errors.push(`type must be ${LIABILITY_KINDS.join(' | ')}`);
+  if (!Number.isFinite(Number(r.principal)) || Number(r.principal) <= 0) errors.push('principal must be > 0');
+  if (r.outstanding !== undefined && (!Number.isFinite(Number(r.outstanding)) || Number(r.outstanding) < 0)) errors.push('outstanding must be >= 0');
+  if (r.annualRatePct !== undefined && (!Number.isFinite(Number(r.annualRatePct)) || Number(r.annualRatePct) < 0 || Number(r.annualRatePct) > 100)) errors.push('annualRatePct must be 0–100');
+  if (!DATE_RE.test(String(r.startDate || ''))) errors.push('startDate must be YYYY-MM-DD');
+  if (r.maturityDate !== undefined && r.maturityDate !== null && !DATE_RE.test(String(r.maturityDate))) errors.push('maturityDate must be YYYY-MM-DD');
+  if (!Number.isFinite(Number(r.emi)) || Number(r.emi) <= 0) errors.push('emi must be > 0');
+  if (r.emiFrequency !== undefined && r.emiFrequency !== 'monthly') errors.push("emiFrequency: only 'monthly' supported");
+  if (r.nextDueDate !== undefined && r.nextDueDate !== null && !DATE_RE.test(String(r.nextDueDate))) errors.push('nextDueDate must be YYYY-MM-DD');
+  return errors;
+}
+
 // Amounts cross the API boundary in rupees and are stored as integer paise.
 // Returns an error for unusable values, a warning when the value would be
 // rounded to paise on restore. Balances (openingBalance, goal current) may
@@ -109,6 +146,8 @@ const KNOWN_KEYS = {
   contributions: new Set(['id', 'goalId', 'amount', 'amountPaise', 'date', 'account', 'note', 'createdAt', 'userId']),
   recurring: new Set(['id', 'name', 'amount', 'amountPaise', 'type', 'frequency', 'account', 'category', 'startDate', 'endDate', 'status', 'autoCreate', 'createdAt', 'updatedAt', 'userId']),
   imports: new Set(['key', 'rowCount', 'createdAt', 'userId']),
+  assets: new Set(['id', 'name', 'type', 'value', 'valuePaise', 'purchaseDate', 'purchasePrice', 'purchasePaise', 'valuationDate', 'notes', 'linkedAccount', 'valuations', 'createdAt', 'updatedAt', 'userId']),
+  liabilities: new Set(['id', 'name', 'type', 'principal', 'principalPaise', 'outstanding', 'outstandingPaise', 'annualRatePct', 'rateType', 'startDate', 'maturityDate', 'emi', 'emiPaise', 'emiFrequency', 'nextDueDate', 'lender', 'notes', 'createdAt', 'updatedAt', 'userId']),
   autopilotRules: new Set(['id', 'name', 'trigger', 'conditions', 'actions', 'requireApproval', 'params', 'status', 'createdAt', 'updatedAt', 'userId']),
   autopilotRuns: new Set(['id', 'ruleId', 'trigger', 'key', 'decision', 'detail', 'at', 'userId']),
   notifications: new Set(['id', 'kind', 'title', 'body', 'payload', 'ruleId', 'status', 'createdAt', 'userId'])
@@ -186,6 +225,8 @@ export function normalizeBackup(input) {
     contributions: Array.isArray(data.contributions) ? data.contributions : [],
     recurring: Array.isArray(data.recurring) ? data.recurring : [],
     imports: Array.isArray(data.imports) ? data.imports : [],
+    assets: Array.isArray(data.assets) ? data.assets : [],
+    liabilities: Array.isArray(data.liabilities) ? data.liabilities : [],
     autopilotRules: Array.isArray(data.autopilotRules) ? data.autopilotRules : [],
     autopilotRuns: Array.isArray(data.autopilotRuns) ? data.autopilotRuns : [],
     notifications: Array.isArray(data.notifications) ? data.notifications : [],
@@ -270,6 +311,8 @@ export function validateBackupData(data, opts = {}) {
   check('categories', data.categories, validateBackupCategory);
   check('upiIds', data.upiIds, validateBackupUpi);
   check('imports', data.imports, validateBackupImport);
+  check('assets', data.assets, validateBackupAsset);
+  check('liabilities', data.liabilities, validateBackupLiability);
   check('autopilotRules', data.autopilotRules, (r) => validateRule(r || {}));
   check('autopilotRuns', data.autopilotRuns, validateBackupRun);
   check('notifications', data.notifications, validateBackupNotification);
@@ -355,7 +398,7 @@ const toPaiseInt = (rupees) => Math.round(Number(rupees) * 100);
 //          notifications:[], imports:[], budgets:{} }
 export function diffPreview(live, incoming, mode = 'merge') {
   const per = {};
-  const keys = ['transactions', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'autopilotRules', 'autopilotRuns', 'notifications', 'imports'];
+  const keys = ['transactions', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'autopilotRules', 'autopilotRuns', 'notifications', 'imports', 'assets', 'liabilities'];
   for (const k of keys) {
     const liveIds = new Set((live[k] || []).map((r) => r && (r.id || r.key)).filter(Boolean));
     const inIds = (incoming[k] || []).map((r) => r && (r.id || r.key)).filter(Boolean);
@@ -411,7 +454,7 @@ export function diffPreview(live, incoming, mode = 'merge') {
 
 export function summarizeBackup(data) {
   const counts = {};
-  for (const k of ['transactions', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'autopilotRules']) {
+  for (const k of ['transactions', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'autopilotRules', 'assets', 'liabilities']) {
     counts[k] = (data[k] || []).length;
   }
   counts.budgets = Object.keys(data.budgets || {}).length;

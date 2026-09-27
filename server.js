@@ -66,6 +66,7 @@ function emptyDb() {
     accounts: [], categories: [], upiIds: [], goals: [], contributions: [],
     recurring: [], preferences: [], imports: [], resets: [],
     autopilotRules: [], autopilotRuns: [], notifications: [],
+    assets: [], liabilities: [],
     securityEvents: [], audit: []
   };
 }
@@ -1745,6 +1746,260 @@ app.get('/api/export', authMiddleware, async (req, res) => {
   });
 });
 
+// ── Assets & Debt (balance-sheet workspace) ────────────────────────────
+// Money in rupees at the boundary, integer paise internally. Projections and
+// scenarios always run client-side (loans.js) and never write the ledger;
+// recording a payment is an explicit POST that posts exactly one transfer
+// plus an outstanding-balance update (no double count: transfers are never
+// income/expense, and card debt stays tracked via card accounts).
+import {
+  ASSET_REGISTER_TYPES, LIABILITY_REGISTER_TYPES, isValidDate as isLoanDate
+} from './src/services/loans.js';
+
+const ASSET_KINDS = new Set(ASSET_REGISTER_TYPES);
+const LIABILITY_KINDS = new Set(LIABILITY_REGISTER_TYPES);
+
+function validateAsset(userId, b) {
+  const errors = [];
+  if (!b.name || typeof b.name !== 'string' || !b.name.trim()) errors.push('name is required');
+  if (!ASSET_KINDS.has(b.type)) errors.push(`type must be ${ASSET_REGISTER_TYPES.join(' | ')}`);
+  const value = Number(b.value);
+  if (!Number.isFinite(value) || value < 0) errors.push('value must be >= 0');
+  if (b.purchaseDate && !isLoanDate(b.purchaseDate)) errors.push('purchaseDate must be YYYY-MM-DD');
+  if (b.valuationDate && !isLoanDate(b.valuationDate)) errors.push('valuationDate must be YYYY-MM-DD');
+  if (b.linkedAccount) {
+    const ok = db.accounts.some((a) => a.userId === userId && a.name === b.linkedAccount);
+    if (!ok) errors.push(`linkedAccount "${b.linkedAccount}" does not exist`);
+  }
+  return errors;
+}
+
+function validateLiability(b) {
+  const errors = [];
+  if (!b.name || typeof b.name !== 'string' || !b.name.trim()) errors.push('name is required');
+  if (!LIABILITY_KINDS.has(b.type)) errors.push(`type must be ${LIABILITY_REGISTER_TYPES.join(' | ')}`);
+  const principal = Number(b.principal);
+  if (!Number.isFinite(principal) || principal <= 0) errors.push('principal must be > 0');
+  if (b.outstanding !== undefined) {
+    const o = Number(b.outstanding);
+    if (!Number.isFinite(o) || o < 0) errors.push('outstanding must be >= 0');
+    else if (Number.isFinite(principal) && o > principal) errors.push('outstanding cannot exceed principal');
+  }
+  const rate = Number(b.annualRatePct ?? 0);
+  if (!Number.isFinite(rate) || rate < 0 || rate > 100) errors.push('annualRatePct must be 0–100');
+  if (!isLoanDate(b.startDate)) errors.push('startDate must be YYYY-MM-DD');
+  if (b.maturityDate && !isLoanDate(b.maturityDate)) errors.push('maturityDate must be YYYY-MM-DD');
+  if (b.maturityDate && isLoanDate(b.startDate) && b.maturityDate < b.startDate) errors.push('maturityDate cannot precede startDate');
+  const emi = Number(b.emi);
+  if (!Number.isFinite(emi) || emi <= 0) errors.push('emi must be > 0');
+  if (b.emiFrequency && b.emiFrequency !== 'monthly') errors.push("emiFrequency: only 'monthly' is supported in this phase");
+  if (b.nextDueDate && !isLoanDate(b.nextDueDate)) errors.push('nextDueDate must be YYYY-MM-DD');
+  return errors;
+}
+
+const toClientAsset = (a) => ({
+  id: a.id, name: a.name, type: a.type,
+  value: toRupees(a.valuePaise || 0), valuePaise: a.valuePaise || 0,
+  purchaseDate: a.purchaseDate || null, purchasePrice: a.purchasePaise != null ? toRupees(a.purchasePaise) : null,
+  valuationDate: a.valuationDate || null, notes: a.notes || '',
+  linkedAccount: a.linkedAccount || null,
+  valuations: (a.valuations || []).map((v) => ({ date: v.date, value: toRupees(v.valuePaise || 0), valuePaise: v.valuePaise || 0, note: v.note || '' })),
+  createdAt: a.createdAt, updatedAt: a.updatedAt
+});
+
+const toClientLiability = (l) => ({
+  id: l.id, name: l.name, type: l.type,
+  principal: toRupees(l.principalPaise || 0), principalPaise: l.principalPaise || 0,
+  outstanding: toRupees(l.outstandingPaise || 0), outstandingPaise: l.outstandingPaise || 0,
+  annualRatePct: l.annualRatePct || 0, rateType: l.rateType || 'fixed',
+  startDate: l.startDate, maturityDate: l.maturityDate || null,
+  emi: toRupees(l.emiPaise || 0), emiPaise: l.emiPaise || 0,
+  emiFrequency: l.emiFrequency || 'monthly',
+  nextDueDate: l.nextDueDate || null, lender: l.lender || '', notes: l.notes || '',
+  createdAt: l.createdAt, updatedAt: l.updatedAt
+});
+
+app.get('/api/assets', authMiddleware, async (req, res) => {
+  res.json({ assets: db.assets.filter((a) => a.userId === req.user.id).map(toClientAsset) });
+});
+
+app.post('/api/assets', authMiddleware, async (req, res) => {
+  const b = req.body || {};
+  const errors = validateAsset(req.user.id, b);
+  if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+  const now = new Date().toISOString();
+  const a = {
+    id: uid('as_'), userId: req.user.id, name: String(b.name).trim(), type: b.type,
+    valuePaise: toPaise(b.value),
+    purchaseDate: b.purchaseDate || null,
+    purchasePaise: b.purchasePrice !== undefined && b.purchasePrice !== null && b.purchasePrice !== '' ? toPaise(b.purchasePrice) : null,
+    valuationDate: b.valuationDate || now.slice(0, 10),
+    notes: String(b.notes || '').slice(0, 500),
+    linkedAccount: b.linkedAccount || null,
+    valuations: [{ date: b.valuationDate || now.slice(0, 10), valuePaise: toPaise(b.value), note: 'opening valuation' }],
+    createdAt: now, updatedAt: now
+  };
+  db.assets.push(a);
+  audit(req.user.id, 'create', 'asset', a.id, `${a.name} ${toRupees(a.valuePaise)}`);
+  await save();
+  res.status(201).json({ asset: toClientAsset(a) });
+});
+
+app.put('/api/assets/:id', authMiddleware, async (req, res) => {
+  const a = db.assets.find((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (!a) return res.status(404).json({ error: 'Asset not found' });
+  const b = req.body || {};
+  const errors = validateAsset(req.user.id, { ...toClientAsset(a), ...b });
+  if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+  const now = new Date().toISOString();
+  // A changed value is recorded as a valuation entry (history is append-only).
+  const newPaise = toPaise(b.value !== undefined ? b.value : toRupees(a.valuePaise));
+  const changed = newPaise !== a.valuePaise;
+  if (changed) {
+    a.valuations.push({ date: (b.valuationDate || now.slice(0, 10)), valuePaise: newPaise, note: String(b.valuationNote || 'revaluation').slice(0, 200) });
+  }
+  a.name = String(b.name !== undefined ? b.name : a.name).trim();
+  a.type = b.type || a.type;
+  a.valuePaise = newPaise;
+  a.purchaseDate = b.purchaseDate !== undefined ? (b.purchaseDate || null) : a.purchaseDate;
+  if (b.purchasePrice !== undefined) a.purchasePaise = (b.purchasePrice === null || b.purchasePrice === '') ? null : toPaise(b.purchasePrice);
+  a.valuationDate = b.valuationDate || (changed ? now.slice(0, 10) : (a.valuationDate || now.slice(0, 10)));
+  a.notes = b.notes !== undefined ? String(b.notes).slice(0, 500) : a.notes;
+  a.linkedAccount = b.linkedAccount !== undefined ? (b.linkedAccount || null) : a.linkedAccount;
+  a.updatedAt = now;
+  audit(req.user.id, 'update', 'asset', a.id, a.name);
+  await save();
+  res.json({ asset: toClientAsset(a) });
+});
+
+app.delete('/api/assets/:id', authMiddleware, async (req, res) => {
+  const idx = db.assets.findIndex((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (idx === -1) return res.status(404).json({ error: 'Asset not found' });
+  const [gone] = db.assets.splice(idx, 1);
+  audit(req.user.id, 'delete', 'asset', gone.id, gone.name);
+  await save();
+  res.json({ ok: true });
+});
+
+app.post('/api/assets/:id/valuations', authMiddleware, async (req, res) => {
+  const a = db.assets.find((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (!a) return res.status(404).json({ error: 'Asset not found' });
+  const b = req.body || {};
+  const date = b.date || new Date().toISOString().slice(0, 10);
+  const value = Number(b.value);
+  if (!isLoanDate(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  if (!Number.isFinite(value) || value < 0) return res.status(400).json({ error: 'value must be >= 0' });
+  const now = new Date().toISOString();
+  a.valuations.push({ date, valuePaise: toPaise(value), note: String(b.note || '').slice(0, 200) });
+  a.valuations.sort((x, y) => (x.date < y.date ? -1 : 1));
+  const latest = a.valuations[a.valuations.length - 1];
+  a.valuePaise = latest.valuePaise;
+  a.valuationDate = latest.date;
+  a.updatedAt = now;
+  audit(req.user.id, 'update', 'asset_valuation', a.id, `${a.name} → ${toRupees(a.valuePaise)} @ ${a.valuationDate}`);
+  await save();
+  res.status(201).json({ asset: toClientAsset(a) });
+});
+
+app.get('/api/liabilities', authMiddleware, async (req, res) => {
+  res.json({ liabilities: db.liabilities.filter((l) => l.userId === req.user.id).map(toClientLiability) });
+});
+
+app.post('/api/liabilities', authMiddleware, async (req, res) => {
+  const b = req.body || {};
+  const errors = validateLiability(b);
+  if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+  const now = new Date().toISOString();
+  const l = {
+    id: uid('li_'), userId: req.user.id, name: String(b.name).trim(), type: b.type,
+    principalPaise: toPaise(b.principal),
+    outstandingPaise: b.outstanding !== undefined ? toPaise(b.outstanding) : toPaise(b.principal),
+    annualRatePct: Number(b.annualRatePct || 0),
+    rateType: ['fixed', 'floating', 'unknown'].includes(b.rateType) ? b.rateType : 'fixed',
+    startDate: b.startDate, maturityDate: b.maturityDate || null,
+    emiPaise: toPaise(b.emi), emiFrequency: 'monthly',
+    nextDueDate: b.nextDueDate || null, lender: String(b.lender || '').slice(0, 120),
+    notes: String(b.notes || '').slice(0, 500),
+    createdAt: now, updatedAt: now
+  };
+  db.liabilities.push(l);
+  audit(req.user.id, 'create', 'liability', l.id, `${l.name} outstanding ${toRupees(l.outstandingPaise)}`);
+  await save();
+  res.status(201).json({ liability: toClientLiability(l) });
+});
+
+app.put('/api/liabilities/:id', authMiddleware, async (req, res) => {
+  const l = db.liabilities.find((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (!l) return res.status(404).json({ error: 'Liability not found' });
+  const b = req.body || {};
+  const merged = { ...toClientLiability(l), ...b };
+  const errors = validateLiability(merged);
+  if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+  const now = new Date().toISOString();
+  l.name = String(merged.name).trim();
+  l.type = merged.type;
+  l.principalPaise = toPaise(merged.principal);
+  l.outstandingPaise = Math.min(toPaise(merged.outstanding), l.principalPaise);
+  l.annualRatePct = Number(merged.annualRatePct || 0);
+  l.rateType = ['fixed', 'floating', 'unknown'].includes(merged.rateType) ? merged.rateType : 'fixed';
+  l.startDate = merged.startDate;
+  l.maturityDate = merged.maturityDate || null;
+  l.emiPaise = toPaise(merged.emi);
+  l.nextDueDate = merged.nextDueDate || null;
+  l.lender = String(merged.lender || '').slice(0, 120);
+  l.notes = String(merged.notes || '').slice(0, 500);
+  l.updatedAt = now;
+  audit(req.user.id, 'update', 'liability', l.id, l.name);
+  await save();
+  res.json({ liability: toClientLiability(l) });
+});
+
+app.delete('/api/liabilities/:id', authMiddleware, async (req, res) => {
+  const idx = db.liabilities.findIndex((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (idx === -1) return res.status(404).json({ error: 'Liability not found' });
+  const [gone] = db.liabilities.splice(idx, 1);
+  audit(req.user.id, 'delete', 'liability', gone.id, gone.name);
+  await save();
+  res.json({ ok: true });
+});
+
+// Explicit loan payment: posts exactly ONE transfer (account → liability
+// name; transfers are never income/expense) and reduces the outstanding by
+// the principal portion. No phantom ledger rows, no double count.
+app.post('/api/liabilities/:id/payments', authMiddleware, async (req, res) => {
+  const l = db.liabilities.find((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (!l) return res.status(404).json({ error: 'Liability not found' });
+  const b = req.body || {};
+  const date = b.date || new Date().toISOString().slice(0, 10);
+  const amount = Number(b.amount);
+  const interest = Number(b.interest ?? 0);
+  if (!isLoanDate(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be > 0' });
+  if (!Number.isFinite(interest) || interest < 0 || interest > amount) {
+    return res.status(400).json({ error: 'interest must be between 0 and amount' });
+  }
+  const acc = db.accounts.find((a) => a.userId === req.user.id && a.name === b.account);
+  if (!acc) return res.status(400).json({ error: 'paying account does not exist' });
+  const principalPaise = toPaise(amount) - toPaise(interest);
+  if (principalPaise > l.outstandingPaise) {
+    return res.status(400).json({ error: `principal portion ${toRupees(principalPaise)} exceeds outstanding ${toRupees(l.outstandingPaise)}` });
+  }
+  const now = new Date().toISOString();
+  const tx = buildTx(req.user.id, {
+    date, type: 'transfer', amount,
+    accountFrom: acc.name, accountTo: l.name,
+    merchant: l.lender || l.name,
+    description: `Loan payment: ${l.name} (principal ${toRupees(principalPaise)}, interest ${toRupees(toPaise(interest))})${b.note ? ` — ${String(b.note).slice(0, 120)}` : ''}`,
+    status: 'completed', source: 'loan_payment'
+  });
+  db.transactions.push(tx);
+  l.outstandingPaise -= principalPaise;
+  l.updatedAt = now;
+  audit(req.user.id, 'update', 'loan_payment', l.id, `${l.name} principal ${toRupees(principalPaise)} via ${acc.name}`);
+  await save();
+  res.status(201).json({ liability: toClientLiability(l), transaction: toClientTx(tx) });
+});
+
 // ── Portability: versioned backup, restore (dry-run), per-account CSV ──
 const PORTABILITY_ACTIONS = new Set(['export', 'import', 'restore', 'wipe_data']);
 
@@ -1792,6 +2047,22 @@ app.get('/api/portability/backup', authMiddleware, async (req, res) => {
     })),
     imports: db.imports.filter((x) => x.userId === id).map((x) => ({
       key: x.key, rowCount: x.rowCount || 0, createdAt: x.createdAt
+    })),
+    assets: db.assets.filter((a) => a.userId === id).map((a) => ({
+      id: a.id, name: a.name, type: a.type, value: toRupees(a.valuePaise || 0),
+      purchaseDate: a.purchaseDate || null,
+      purchasePrice: a.purchasePaise != null ? toRupees(a.purchasePaise) : null,
+      valuationDate: a.valuationDate || null, notes: a.notes || '',
+      linkedAccount: a.linkedAccount || null,
+      valuations: (a.valuations || []).map((v) => ({ date: v.date, value: toRupees(v.valuePaise || 0), note: v.note || '' }))
+    })),
+    liabilities: db.liabilities.filter((l) => l.userId === id).map((l) => ({
+      id: l.id, name: l.name, type: l.type,
+      principal: toRupees(l.principalPaise || 0), outstanding: toRupees(l.outstandingPaise || 0),
+      annualRatePct: l.annualRatePct || 0, rateType: l.rateType || 'fixed',
+      startDate: l.startDate, maturityDate: l.maturityDate || null,
+      emi: toRupees(l.emiPaise || 0), emiFrequency: l.emiFrequency || 'monthly',
+      nextDueDate: l.nextDueDate || null, lender: l.lender || '', notes: l.notes || ''
     })),
     autopilotRules: db.autopilotRules.filter((r) => r.userId === id).map(stripUser),
     autopilotRuns: db.autopilotRuns.filter((r) => r.userId === id).map((r) => ({
@@ -1861,7 +2132,7 @@ app.get('/api/portability/history', authMiddleware, async (req, res) => {
 // Collections a replace-mode restore wipes (caller's rows only). Authentication,
 // sessions, password-reset codes are handled separately; securityEvents are
 // deliberately PRESERVED so a restore can never erase the security history.
-const WIPEABLE_KEYS = ['transactions', 'budgets', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'resets', 'autopilotRules', 'autopilotRuns', 'notifications', 'imports'];
+const WIPEABLE_KEYS = ['transactions', 'budgets', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'resets', 'autopilotRules', 'autopilotRuns', 'notifications', 'imports', 'assets', 'liabilities'];
 
 // Generic in-memory operation limiter (per Vercel instance; counts reset on
 // cold start — documented in README, not a distributed guarantee).
@@ -1892,6 +2163,8 @@ function liveUserSlices(userId) {
     autopilotRules: db.autopilotRules.filter((r) => r.userId === userId),
     autopilotRuns: db.autopilotRuns.filter((r) => r.userId === userId),
     notifications: db.notifications.filter((n) => n.userId === userId),
+    assets: db.assets.filter((a) => a.userId === userId),
+    liabilities: db.liabilities.filter((l) => l.userId === userId),
     budgets
   };
 }
@@ -2006,6 +2279,37 @@ function insertBackupRecord(userId, key, r, existingIds, now) {
       payload: r.payload || null, ruleId: r.ruleId || null,
       status: r.status === 'read' ? 'read' : 'unread', createdAt: r.createdAt || now
     };
+  } else if (key === 'assets') {
+    const id = keepId('as_'); if (!id) return 'skipped';
+    const linkedOk = !r.linkedAccount || db.accounts.some((a) => a.userId === userId && a.name === r.linkedAccount);
+    row = {
+      id, userId, name: String(r.name).trim(), type: r.type,
+      valuePaise: toPaise(Number(r.value) || 0),
+      purchaseDate: r.purchaseDate || null,
+      purchasePaise: r.purchasePrice !== undefined && r.purchasePrice !== null && r.purchasePrice !== '' ? toPaise(r.purchasePrice) : null,
+      valuationDate: r.valuationDate || now.slice(0, 10),
+      notes: String(r.notes || '').slice(0, 500),
+      linkedAccount: linkedOk ? (r.linkedAccount || null) : null,
+      valuations: Array.isArray(r.valuations) ? r.valuations.filter((v) => v && v.date).map((v) => ({
+        date: v.date, valuePaise: toPaise(Number(v.value) || 0), note: String(v.note || '').slice(0, 200)
+      })).slice(0, 500) : [],
+      createdAt: r.createdAt || now, updatedAt: now
+    };
+    if (!row.valuations.length) row.valuations = [{ date: row.valuationDate, valuePaise: row.valuePaise, note: 'opening valuation' }];
+  } else if (key === 'liabilities') {
+    const id = keepId('li_'); if (!id) return 'skipped';
+    row = {
+      id, userId, name: String(r.name).trim(), type: r.type,
+      principalPaise: toPaise(r.principal),
+      outstandingPaise: Math.min(toPaise(r.outstanding !== undefined ? r.outstanding : r.principal), toPaise(r.principal)),
+      annualRatePct: Number(r.annualRatePct || 0),
+      rateType: ['fixed', 'floating', 'unknown'].includes(r.rateType) ? r.rateType : 'fixed',
+      startDate: r.startDate, maturityDate: r.maturityDate || null,
+      emiPaise: toPaise(r.emi), emiFrequency: 'monthly',
+      nextDueDate: r.nextDueDate || null, lender: String(r.lender || '').slice(0, 120),
+      notes: String(r.notes || '').slice(0, 500),
+      createdAt: r.createdAt || now, updatedAt: now
+    };
   }
   if (!row) return { error: 'unsupported collection' };
   db[key].push(row);
@@ -2081,7 +2385,7 @@ app.post('/api/portability/preview', authMiddleware, async (req, res) => {
     warnings: report.warnings.slice(0, 20),
     dangling: report.dangling.slice(0, 20),
     replaceWipeNote: previewMode === 'replace'
-      ? 'Replace wipes your transactions, budgets, accounts, categories, UPI IDs, goals, contributions, recurring rules, imports, autopilot rules/runs and notifications. Your login, sessions, security history and account identity are preserved.'
+      ? 'Replace wipes your transactions, budgets, accounts, categories, UPI IDs, goals, contributions, recurring rules, imports, autopilot rules/runs, notifications, assets and liabilities. Your login, sessions, security history and account identity are preserved.'
       : null
   });
 });
@@ -2126,12 +2430,12 @@ app.post('/api/portability/restore', authMiddleware, async (req, res) => {
   const now = new Date().toISOString();
   const inserted = {}, skipped = {}, conflictIds = {};
   const existingIds = new Set();
-  for (const k of ['transactions', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'autopilotRuns', 'notifications']) {
+  for (const k of ['transactions', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'autopilotRuns', 'notifications', 'assets', 'liabilities']) {
     for (const t of db[k].filter((x) => x.userId === req.user.id)) existingIds.add(t.id);
   }
   for (const x of db.imports.filter((x) => x.userId === req.user.id)) existingIds.add(x.key);
   const hasError = (key, i) => report.errors.some((e) => e.startsWith(`${key}[${i}]`));
-  const MERGEABLE = ['transactions', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'imports', 'autopilotRules', 'autopilotRuns', 'notifications'];
+  const MERGEABLE = ['transactions', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'imports', 'autopilotRules', 'autopilotRuns', 'notifications', 'assets', 'liabilities'];
   for (const key of MERGEABLE) {
     const list = norm.data[key] || [];
     for (let i = 0; i < list.length; i++) {

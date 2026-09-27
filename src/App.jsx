@@ -19,6 +19,7 @@ const LearnToolsPage = lazy(() => import('./components/LearnToolsPage.jsx'));
 const SettingsPage = lazy(() => import('./components/SettingsPage.jsx'));
 const SecurityPage = lazy(() => import('./components/SecurityPage.jsx'));
 const PortabilityPage = lazy(() => import('./components/PortabilityPage.jsx'));
+const AssetsDebtPage = lazy(() => import('./components/AssetsDebtPage.jsx'));
 const CommandCenterPage = lazy(() => import('./components/CommandCenterPage.jsx'));
 const CashflowPage = lazy(() => import('./components/CashflowPage.jsx'));
 const BucketsPage = lazy(() => import('./components/BucketsPage.jsx'));
@@ -62,6 +63,7 @@ const NAV = [
   { id: 'learn', label: 'Learn & Tools', ico: '📚' },
   { section: 'Manage' },
   { id: 'accounts', label: 'Accounts & Wallets', ico: '🏦' },
+  { id: 'assetsdebt', label: 'Assets & Debt', ico: '⚖️' },
   { id: 'categories', label: 'Categories', ico: '🏷️' },
   { id: 'upi', label: 'UPI', ico: '📱' },
   { id: 'subs', label: 'Subscriptions', ico: '📡' },
@@ -85,6 +87,7 @@ const TITLES = {
   overview: ['Overview', 'Your complete financial picture — live from your ledger.'],
   transactions: ['Transactions', 'Every rupee earned, spent, transferred or refunded.'],
   accounts: ['Accounts & Wallets', 'Cash, banks, UPI accounts and credit cards.'],
+  assetsdebt: ['Assets & Debt', 'Net worth, asset register, loans, payoff plans and payments.'],
   budgets: ['Budgets', 'Monthly limits with live utilization.'],
   categories: ['Categories', 'Editable hierarchy with real spending.'],
   upi: ['UPI', 'Saved UPI IDs and UPI transaction tracking.'],
@@ -282,6 +285,9 @@ export default function App() {
           )}
           {tab === 'portability' && (
             <PortabilityPage />
+          )}
+          {tab === 'assetsdebt' && (
+            <AssetsDebtPage accounts={accounts} transactions={transactions} />
           )}
           {tab === 'settings' && (
             <SettingsPage user={user} preferences={prefs} onPrefsChanged={setPrefs} onTheme={() => {}} onWipe={wipe} onUserChanged={setUser} onNavigate={go} />

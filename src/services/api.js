@@ -115,6 +115,17 @@ export const api = {
   markNotificationRead: (id) => request(`/api/notifications/${id}/read`, { method: 'POST' }),
   approveDraft: (id) => request(`/api/autopilot/approve/${id}`, { method: 'POST' }),
 
+  listAssets: async () => (await request('/api/assets')).assets,
+  createAsset: async (a) => (await request('/api/assets', { method: 'POST', body: JSON.stringify(a) })).asset,
+  updateAsset: async (id, a) => (await request(`/api/assets/${id}`, { method: 'PUT', body: JSON.stringify(a) })).asset,
+  deleteAsset: (id) => request(`/api/assets/${id}`, { method: 'DELETE' }),
+  addValuation: async (id, v) => (await request(`/api/assets/${id}/valuations`, { method: 'POST', body: JSON.stringify(v) })).asset,
+  listLiabilities: async () => (await request('/api/liabilities')).liabilities,
+  createLiability: async (l) => (await request('/api/liabilities', { method: 'POST', body: JSON.stringify(l) })).liability,
+  updateLiability: async (id, l) => (await request(`/api/liabilities/${id}`, { method: 'PUT', body: JSON.stringify(l) })).liability,
+  deleteLiability: (id) => request(`/api/liabilities/${id}`, { method: 'DELETE' }),
+  recordLoanPayment: (id, p) => request(`/api/liabilities/${id}/payments`, { method: 'POST', body: JSON.stringify(p) }),
+
   getPreferences: async () => (await request('/api/preferences')).preferences,
   savePreferences: async (p) =>
     (await request('/api/preferences', { method: 'PUT', body: JSON.stringify(p) })).preferences,
