@@ -165,6 +165,10 @@ tablet → mobile with collapsible sidebar.
   records, security events, audit log, passwords. Backups carry only a
   minimal `{ id }` owner reference used for ownership validation; every
   collection is filtered to the caller — cross-user leakage is tested.
+- **Integrity note:** backups downloaded before the manifest-input fix
+  report `integrity check failed` on validate (their hash covered
+  non-serialized fields) but still validate and restore normally — only
+  newly downloaded backups carry a verifiable hash.
 - **Validate** (`POST /api/portability/validate`, read-only): format/version,
   required fields, duplicate ids, ownership consistency, date/money/paise
   checks, referential warnings (dangling goal/account links), unknown-field

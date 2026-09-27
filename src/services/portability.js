@@ -138,7 +138,7 @@ const ZERO_OK_MONEY_KEYS = new Set(['openingBalance', 'current']);
 // Known export keys per collection. Unknown keys are reported as warnings
 // (forward compatibility) — never executed or interpreted.
 const KNOWN_KEYS = {
-  transactions: new Set(['id', 'date', 'type', 'amount', 'amountPaise', 'category', 'subcategory', 'paymentMethod', 'account', 'accountFrom', 'accountTo', 'merchant', 'description', 'upiRef', 'tags', 'status', 'source', 'isCreditCardRepayment', 'createdAt', 'updatedAt', 'userId']),
+  transactions: new Set(['id', 'date', 'type', 'amount', 'amountPaise', 'category', 'subcategory', 'paymentMethod', 'account', 'accountFrom', 'accountTo', 'merchant', 'description', 'upiRef', 'tags', 'status', 'source', 'isCreditCardRepayment', 'idempotencyKey', 'createdAt', 'updatedAt', 'userId']),
   accounts: new Set(['id', 'name', 'type', 'institution', 'openingBalance', 'openingPaise', 'status', 'createdAt', 'updatedAt', 'userId']),
   categories: new Set(['id', 'name', 'kind', 'color', 'icon', 'parent', 'createdAt', 'userId']),
   upiIds: new Set(['id', 'upiId', 'accountId', 'createdAt', 'userId']),
@@ -357,10 +357,15 @@ export function validateBackupData(data, opts = {}) {
 }
 
 // Deterministic JSON: same data → same string (metadata excluded by caller).
+// Mirrors JSON.stringify semantics for non-serializable leafs (undefined,
+// functions, symbols are dropped from objects and become null in arrays) so
+// the hash input always equals the wire bytes.
 export function canonicalStringify(v) {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(canonicalStringify).join(',')}]`;
-  return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalStringify(v[k])}`).join(',')}}`;
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return `[${v.map((x) => (typeof x === 'undefined' ? 'null' : canonicalStringify(x))).join(',')}]`;
+  return `{${Object.keys(v).sort()
+    .filter((k) => typeof v[k] !== 'undefined' && typeof v[k] !== 'function' && typeof v[k] !== 'symbol')
+    .map((k) => `${JSON.stringify(k)}:${canonicalStringify(v[k])}`).join(',')}}`;
 }
 
 // Manifest embedded in every versioned backup: counts, integrity hash,
@@ -385,7 +390,9 @@ export function verifyManifest(data, manifest) {
     return { ok: false, error: 'missing integrity metadata' };
   }
   const actual = createHash('sha256').update(canonicalStringify(data)).digest('hex');
-  if (actual !== manifest.integrity.value) return { ok: false, error: 'integrity mismatch — backup was modified after export' };
+  if (actual !== manifest.integrity.value) {
+    return { ok: false, error: 'integrity check failed — cannot confirm the file is unchanged since export (it may predate the integrity fix or was modified)' };
+  }
   return { ok: true };
 }
 

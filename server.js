@@ -2083,7 +2083,11 @@ app.get('/api/portability/backup', authMiddleware, async (req, res) => {
       };
     })()
   };
-  const manifest = buildManifest(data, { appVersion: BACKUP_APP_VERSION });
+  // Hash the JSON-cleaned object so the integrity input is byte-identical to
+  // what res.json() sends (live objects may carry `undefined`, which the
+  // wire format drops — hashing them would break verification on download).
+  const clean = JSON.parse(JSON.stringify(data));
+  const manifest = buildManifest(clean, { appVersion: BACKUP_APP_VERSION });
   audit(req.user.id, 'export', 'backup', null, `versioned backup downloaded (${manifest.integrity.value.slice(0, 12)}…)`);
   await save();
   const body = {
@@ -2092,7 +2096,7 @@ app.get('/api/portability/backup', authMiddleware, async (req, res) => {
     // Minimal owner reference, used only to validate ownership on restore.
     user: { id: req.user.id },
     manifest,
-    data
+    data: clean
   };
   if (req.query.download === '1') {
     const stamp = new Date().toISOString().slice(0, 10);

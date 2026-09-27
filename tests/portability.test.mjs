@@ -104,6 +104,26 @@ describe('portability pure (Phase 3)', () => {
     assert.equal(verifyManifest(tampered, m).ok, false);
   });
 
+  it('5b. manifest survives a JSON round-trip with undefined fields present', () => {
+    // Regression: live export objects carry `undefined` (e.g. unset avatar)
+    // which the wire format drops. Hash input must equal wire bytes.
+    const b = goodBackup();
+    b.data.preferences = { theme: 'dark', avatar: undefined, displayName: undefined };
+    const clean = JSON.parse(JSON.stringify(b.data));
+    const m = buildManifest(clean, { appVersion: '1.0.0' });
+    const roundTripped = JSON.parse(JSON.stringify({ ...b, data: clean, manifest: m }));
+    assert.equal(verifyManifest(roundTripped.data, roundTripped.manifest).ok, true);
+    assert.equal(canonicalStringify({ a: 1, u: undefined }), canonicalStringify({ a: 1 }));
+  });
+
+  it('5c. idempotencyKey on transactions is a known field (no false warning)', () => {
+    const b = goodBackup();
+    b.data.transactions[0].idempotencyKey = 'idem_123';
+    const r = validateBackupData(b.data, { ownerId: 'u_test' });
+    assert.ok(!r.warnings.some((w) => w.includes('idempotencyKey')), 'no warning for idempotencyKey');
+    assert.equal(r.invalid.transactions, 0);
+  });
+
   it('6. canonical form is deterministic regardless of key order', () => {
     assert.equal(canonicalStringify({ b: 1, a: { y: 2, x: 1 } }), canonicalStringify({ a: { x: 1, y: 2 }, b: 1 }));
   });
