@@ -107,8 +107,32 @@ and land as `scheduled` transactions with `source: 'autopilot'`.
     history, liabilities with amortization + payoff-scenario planner and
     explicit loan-payment recording (one transfer, no double count).
 
-Global **+ Add** floating button, light/dark mode, responsive desktop →
-tablet → mobile with collapsible sidebar.
+Global **+ Add** floating button (desktop), light/dark/bank themes, responsive
+desktop → tablet → mobile-first shell (bottom nav ≤900px).
+
+## Mobile fintech UI (`src/mobile/`)
+
+Mobile-first redesign on the same data and APIs — no functionality removed:
+
+- **Bottom nav (5):** Home, Activity, Cards, Insights, Profile. Sidebar and
+  desktop topbar take over above 900px; same React tree, CSS-switched.
+- **Home:** greeting header (notification dot = real unread count), navy hero
+  balance (privacy toggle, month-over-month trend from real ledger),
+  Send/Receive/Transfer/Add dock (opens the real transaction form with
+  type presets), income/expense duo with prior-month deltas, Week/Month cash
+  flow, recent activity, top budget-utilization insight with stated basis.
+- **Activity:** inbox-style list with search + type chips, date grouping with
+  daily nets, detail bottom sheet (edits happen in the ledger page).
+- **Cards:** real accounts as wallet cards (live balances only — no invented
+  numbers, no fake freeze controls), per-account recent activity.
+- **Insights:** category donut, income-vs-expense bars, movers, goal,
+  recurring and savings-rate cards — every claim cites its basis/period.
+- **Profile:** grouped settings rows linking to existing pages + every
+  feature page, confirmed sign-out.
+- Identity: midnight navy `#102A43`, electric blue `#398BEE`, emerald
+  `#07865F` on cool paper `#F6F9FB`; tabular numerals; 44px+ targets;
+  safe-area insets; `prefers-reduced-motion` respected; desktop capped at
+  1440px with sidebar navigation intact.
 
 ## Architecture
 

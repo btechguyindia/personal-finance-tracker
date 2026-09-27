@@ -75,7 +75,9 @@ export default function TransactionsPage({ transactions, accounts, onChanged, mo
 
   // Open the add-modal when App's FAB signal fires.
   React.useEffect(() => {
-    if (modalSignal) { setEditingId(null); setForm(emptyForm()); setError(''); setShowModal(true); }
+    // modalSignal is backward compatible: a number opens a blank form, while
+    // { n, preset } (from mobile quick actions) prefills form fields.
+    if (modalSignal) { setEditingId(null); setForm({ ...emptyForm(), ...((modalSignal && modalSignal.preset) || {}) }); setError(''); setShowModal(true); }
   }, [modalSignal]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));

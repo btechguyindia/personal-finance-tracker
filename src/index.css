@@ -1,21 +1,29 @@
 /* ── FinTrack premium design system ── */
 :root {
-  --bg: #f4f6fb; --card: #ffffff; --ink: #0f1e33; --muted: #64748b;
-  --line: #e4e9f2; --accent: #2563eb; --accent-ink: #ffffff;
-  --accent-soft: #e8effe; --good: #059669; --good-soft: #def7ec;
-  --bad: #dc2626; --bad-soft: #fdecec; --warn: #d97706; --warn-soft: #fdf3e3;
-  --sidebar: #0c1a2e; --sidebar-ink: #c7d3e4; --sidebar-active: #ffffff;
-  --shadow: 0 1px 2px rgba(15, 30, 51, 0.05), 0 4px 16px rgba(15, 30, 51, 0.06);
-  --radius: 14px;
-  --font: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  /* FinTrack banking identity: navy + electric blue + emerald on paper */
+  --bg: #F6F9FB; --card: #FFFFFF; --ink: #142E40; --muted: #6B7D8B;
+  --line: #DFE7EC; --accent: #1769AA; --accent-ink: #FFFFFF;
+  --accent-soft: #EAF3F8; --accent-strong: #398BEE;
+  --good: #07865F; --good-soft: #E4F5EC;
+  --bad: #C0453D; --bad-soft: #FBEAE7; --warn: #9A6B1A; --warn-soft: #FaF0DC;
+  --navy: #102A43; --navy-2: #124E78; --emerald-deep: #07634E;
+  --sidebar: #102A43; --sidebar-ink: #A9BECD; --sidebar-active: #ffffff;
+  --shadow: 0 1px 2px rgba(16, 42, 67, 0.05), 0 8px 24px rgba(16, 42, 67, 0.07);
+  --shadow-lg: 0 2px 6px rgba(16, 42, 67, 0.08), 0 20px 48px rgba(16, 42, 67, 0.16);
+  --radius: 16px; --radius-lg: 22px;
+  --font: 'Inter', 'Manrope', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-num: 'Inter', 'Manrope', system-ui, sans-serif;
 }
 [data-theme='dark'] {
-  --bg: #0b1220; --card: #131d31; --ink: #e8eef7; --muted: #93a1b8;
-  --line: #22304a; --accent: #4f8cff; --accent-ink: #081226;
-  --accent-soft: #1b2c4d; --good: #34d399; --good-soft: #0e2e26;
-  --bad: #f87171; --bad-soft: #3a1a1d; --warn: #fbbf24; --warn-soft: #3a2c12;
-  --sidebar: #080e1a; --sidebar-ink: #8fa0ba; --sidebar-active: #ffffff;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.35);
+  --bg: #0A141D; --card: #10222F; --ink: #EAF3F8; --muted: #8CA0AF;
+  --line: #1E3444; --accent: #398BEE; --accent-ink: #062033;
+  --accent-soft: #14293A; --accent-strong: #5EA5F5;
+  --good: #2FBF8F; --good-soft: #0C2E26;
+  --bad: #E0786E; --bad-soft: #3A1D19; --warn: #E0A93E; --warn-soft: #38300F;
+  --navy: #0A141D; --navy-2: #124E78; --emerald-deep: #2FBF8F;
+  --sidebar: #070F16; --sidebar-ink: #8CA0AF; --sidebar-active: #ffffff;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 2px 8px rgba(0, 0, 0, 0.5), 0 24px 56px rgba(0, 0, 0, 0.45);
 }
 * { box-sizing: border-box; }
 body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; }
