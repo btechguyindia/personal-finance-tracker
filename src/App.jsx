@@ -18,6 +18,7 @@ const TrendsPage = lazy(() => import('./components/TrendsPage.jsx'));
 const LearnToolsPage = lazy(() => import('./components/LearnToolsPage.jsx'));
 const SettingsPage = lazy(() => import('./components/SettingsPage.jsx'));
 const SecurityPage = lazy(() => import('./components/SecurityPage.jsx'));
+const PortabilityPage = lazy(() => import('./components/PortabilityPage.jsx'));
 const CommandCenterPage = lazy(() => import('./components/CommandCenterPage.jsx'));
 const CashflowPage = lazy(() => import('./components/CashflowPage.jsx'));
 const BucketsPage = lazy(() => import('./components/BucketsPage.jsx'));
@@ -65,6 +66,7 @@ const NAV = [
   { id: 'upi', label: 'UPI', ico: '📱' },
   { id: 'subs', label: 'Subscriptions', ico: '📡' },
   { id: 'security', label: 'Security & Privacy', ico: '🛡️' },
+  { id: 'portability', label: 'Data Portability', ico: '💾' },
   { id: 'settings', label: 'Settings', ico: '⚙️' }
 ];
 
@@ -95,6 +97,7 @@ const TITLES = {
   trends: ['Trends & Health', '6-month trends, movers and your financial health score.'],
   learn: ['Learn & Tools', 'Money guides plus SIP, tax, emergency and 50/30/20 tools.'],
   security: ['Security & Privacy', 'Sessions, activity, password and account deletion.'],
+  portability: ['Data Portability', 'Versioned backups, validation, restore preview and safe restore.'],
   settings: ['Settings', 'Profile, preferences, backup and privacy.']
 };
 
@@ -276,6 +279,9 @@ export default function App() {
           )}
           {tab === 'security' && (
             <SecurityPage onLogout={logout} />
+          )}
+          {tab === 'portability' && (
+            <PortabilityPage />
           )}
           {tab === 'settings' && (
             <SettingsPage user={user} preferences={prefs} onPrefsChanged={setPrefs} onTheme={() => {}} onWipe={wipe} onUserChanged={setUser} onNavigate={go} />

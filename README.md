@@ -99,6 +99,10 @@ and land as `scheduled` transactions with `source: 'autopilot'`.
 15. **Security & Privacy** — sessions with coarse device labels, revoke one /
     revoke-others, sign-in & security activity, password controls with
     other-device sign-out, and a two-step account deletion workflow.
+16. **Data Portability** — versioned JSON backups with integrity manifest,
+    per-account CSV, backup-history registry, server-side validation,
+    restore preview (added/replaced/removed/conflicts/balance effect) and
+    merge/replace restore with password + phrase safeguards.
 
 Global **+ Add** floating button, light/dark mode, responsive desktop →
 tablet → mobile with collapsible sidebar.
@@ -139,6 +143,56 @@ tablet → mobile with collapsible sidebar.
 - **Limits:** last-activity persists at most hourly (not per request);
   rate limits are best-effort in-memory per serverless instance;
   concurrent writes to the single JSON document remain last-write-wins.
+
+## Data portability (FinTrack 3.0 · Phase 3)
+
+- **Data Portability Center** (sidebar → 💾, also linked from Settings):
+  backup/export card, format & compatibility notes, backup-history registry,
+  upload → validate → preview → restore flow with progress/success/failure
+  states and rollback guidance. Nothing destructive is one click.
+- **Versioned backup** (`GET /api/portability/backup` → `fintrack-backup`
+  v1, `?download=1` for an attachment with a safe filename): transactions,
+  budgets, raw accounts (opening balances preserved), categories, UPI IDs,
+  goals + contributions, recurring, imports, autopilot rules, autopilot runs,
+  notifications, preferences — an explicit allowlist. Format carries a
+  manifest (record counts, SHA-256 integrity hash, INR/paise conventions,
+  app version, feature list). Money crosses the boundary in rupees (≤2
+  decimals); anything finer warns and rounds to paise on restore.
+- **Never exported:** users, sessions/token verifiers, password-reset
+  records, security events, audit log, passwords. Backups carry only a
+  minimal `{ id }` owner reference used for ownership validation; every
+  collection is filtered to the caller — cross-user leakage is tested.
+- **Validate** (`POST /api/portability/validate`, read-only): format/version,
+  required fields, duplicate ids, ownership consistency, date/money/paise
+  checks, referential warnings (dangling goal/account links), unknown-field
+  warnings, manifest integrity check, compatibility notes. Never writes.
+- **Preview** (`POST /api/portability/preview`, read-only): live vs incoming
+  counts, per-collection added/replaced/removed, id conflicts, budget
+  changes, and the balance effect in integer paise — per mode.
+- **Restore** (`POST /api/portability/restore`): always validates first;
+  `dryRun: true` previews counts + errors with zero writes. `merge` adds
+  new records, skips id collisions (reported, never silently overwritten),
+  keeps incoming ids when free so re-merges are no-ops. `replace` needs the
+  current **password** (re-authentication, mirroring account deletion) plus
+  `REPLACE ALL MY DATA`, aborts on any invalid record, wipes only the
+  caller's financial collections, and **preserves login, sessions, security
+  history and account identity**. The UI auto-downloads a pre-restore backup
+  first — that file is the rollback (re-restore it to undo). Post-restore
+  the server re-verifies counts; balances always rebuild from the ledger,
+  never from cached totals. Legacy `/api/export` payloads restore too.
+- **Per-account CSV** (`GET /api/portability/export.csv?account=NAME`)
+  matches ledger rows from any side (account/from/to).
+- **History** (`GET /api/portability/history`): a **metadata-only registry**
+  (audit trail: what + when, never file contents). There is no server-side
+  backup storage — downloaded files ARE your backups. No paid storage is
+  used or required.
+- **Limits & honesty:** request bodies cap at 8 MB; backups over 8 MB /
+  10,000 transactions are rejected (HTTP 413/400); Vercel caps serverless
+  bodies at ~4.5 MB, so large restores must run against a local server.
+  Replace-mode restore is wipe-then-insert on the single-document store —
+  **not atomic** (documented risk; concurrency control is Phase 3.5 next).
+  Validate/preview/restore are rate-limited (best-effort in-memory, per
+  serverless instance, like login limits).
 
 ## Data-accuracy rules
 - Transfers (incl. credit-card repayments) are **excluded** from

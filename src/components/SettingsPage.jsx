@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { api, getTheme, setTheme } from '../services/api.js';
+import React, { useEffect, useRef, useState } from 'react';
+import { api, getTheme, getToken, setTheme } from '../services/api.js';
 
 export const AVATAR_EMOJI = ['😀', '😎', '🦊', '🐼', '🦁', '🐸', '🦄', '🐝', '🌟', '⚡', '💎', '🚀', '🌈', '🍀', '🔥', '💰'];
 export const AVATAR_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444', '#14b8a6', '#6366f1'];
@@ -13,6 +13,20 @@ export default function SettingsPage({ user, preferences, onPrefsChanged, onThem
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
   const [theme, setThemeState] = useState(getTheme());
+  const [accounts, setAccounts] = useState([]);
+  const [csvAccount, setCsvAccount] = useState('');
+  const [history, setHistory] = useState([]);
+  const [restoreFile, setRestoreFile] = useState(null);
+  const [restoreReport, setRestoreReport] = useState(null);
+  const [restoreMode, setRestoreMode] = useState('merge');
+  const [restorePhrase, setRestorePhrase] = useState('');
+  const [busyBackup, setBusyBackup] = useState(false);
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    api.getAccounts().then(setAccounts).catch(() => {});
+    api.getPortabilityHistory().then(setHistory).catch(() => {});
+  }, []);
 
   const prefs = preferences || {};
   const setPref = async (patch) => {
@@ -56,17 +70,76 @@ export default function SettingsPage({ user, preferences, onPrefsChanged, onThem
   };
 
   const exportData = async () => {
-    setError(''); setMsg('');
+    setError(''); setMsg(''); setBusyBackup(true);
     try {
-      const data = await api.exportAll();
+      const data = await api.downloadBackup();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `fintrack-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `fintrack-backup-v${data.version || 1}-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(a.href);
-      setMsg('Backup downloaded.');
+      setMsg('Versioned backup downloaded (includes opening balances + contributions).');
+      api.getPortabilityHistory().then(setHistory).catch(() => {});
     } catch (err) { setError(err.message); }
+    finally { setBusyBackup(false); }
+  };
+
+  const downloadCsv = async () => {
+    setError(''); setMsg('');
+    if (!csvAccount) { setError('Pick an account first.'); return; }
+    setBusyBackup(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`/api/portability/export.csv?account=${encodeURIComponent(csvAccount)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Export failed (${res.status})`);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `fintrack-${csvAccount.replace(/[^\w\-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      setMsg(`CSV for ${csvAccount} downloaded.`);
+      api.getPortabilityHistory().then(setHistory).catch(() => {});
+    } catch (err) { setError(err.message); }
+    finally { setBusyBackup(false); }
+  };
+
+  const runDryRun = async () => {
+    setError(''); setMsg(''); setRestoreReport(null);
+    if (!restoreFile) { setError('Choose a backup file first.'); return; }
+    setBusyBackup(true);
+    try {
+      const text = await restoreFile.text();
+      let backup;
+      try { backup = JSON.parse(text); } catch { throw new Error('File is not valid JSON.'); }
+      const report = await api.restoreBackup(backup, { dryRun: true });
+      setRestoreReport({ ...report, fileName: restoreFile.name });
+      setMsg('Dry run complete — nothing was written. Review below, then apply.');
+    } catch (err) { setError(err.message); }
+    finally { setBusyBackup(false); }
+  };
+
+  const applyRestore = async () => {
+    setError(''); setMsg('');
+    if (!restoreReport) return;
+    if (restoreMode === 'replace' && restorePhrase !== 'REPLACE ALL MY DATA') {
+      setError('Type REPLACE ALL MY DATA exactly to confirm a full replace.');
+      return;
+    }
+    if (!window.confirm(restoreMode === 'replace'
+      ? 'REPLACE all your data with this backup? Current data will be wiped first.'
+      : 'Merge this backup into your data? Existing records are kept; new ones are added.')) return;
+    setBusyBackup(true);
+    try {
+      const text = await restoreFile.text();
+      const out = await api.restoreBackup(JSON.parse(text), { dryRun: false, mode: restoreMode, confirmation: restorePhrase });
+      setMsg(`Restore applied (${out.mode}): ${JSON.stringify(out.inserted)}. Reloading…`);
+      setTimeout(() => window.location.reload(), 1200);
+    } catch (err) { setError(err.message); }
+    finally { setBusyBackup(false); }
   };
 
   const wipe = async () => {
@@ -145,8 +218,66 @@ export default function SettingsPage({ user, preferences, onPrefsChanged, onThem
         </div>
         <div className="card">
           <div className="card-head"><h3>Backup &amp; privacy</h3></div>
-          <p className="muted small">Download everything (transactions, accounts, budgets, goals, rules) as JSON. Store it somewhere safe.</p>
-          <div className="row"><button className="btn" onClick={exportData}>⬇ Download backup</button></div>
+          <p className="muted small">Versioned JSON backup (transactions, opening balances, budgets, goals, contributions, rules, preferences). Restores validate first and can dry-run.</p>
+          <div className="row">
+            <button className="btn" disabled={busyBackup} onClick={exportData}>⬇ Download backup (v1)</button>
+            {onNavigate && <button className="btn primary" onClick={() => onNavigate('portability')}>💾 Open Data Portability Center →</button>}
+          </div>
+          <h4>Per-account CSV</h4>
+          <div className="row">
+            <select value={csvAccount} onChange={(e) => setCsvAccount(e.target.value)}>
+              <option value="">Select account…</option>
+              {accounts.map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
+            </select>
+            <button className="btn" disabled={busyBackup || !csvAccount} onClick={downloadCsv}>⬇ Export CSV</button>
+          </div>
+          <h4>Restore from backup</h4>
+          <div className="row">
+            <input type="file" accept=".json,application/json" ref={fileRef}
+              onChange={(e) => { setRestoreFile(e.target.files?.[0] || null); setRestoreReport(null); }} />
+            <button className="btn" disabled={busyBackup || !restoreFile} onClick={runDryRun}>
+              {busyBackup ? 'Checking…' : 'Validate (dry run)'}
+            </button>
+          </div>
+          {restoreReport && (
+            <div style={{ marginTop: 10 }}>
+              <p className="muted small">
+                <b>{restoreReport.fileName}</b> — counts: {Object.entries(restoreReport.counts || {}).map(([k, v]) => `${k} ${v}`).join(' · ')}
+              </p>
+              {(restoreReport.errors || []).length > 0 && (
+                <div className="error" style={{ marginTop: 8 }}>
+                  {(restoreReport.errors || []).slice(0, 8).map((e, i) => <div key={i}>{e}</div>)}
+                  {(restoreReport.errors || []).length > 8 && <div>…and {(restoreReport.errors || []).length - 8} more</div>}
+                </div>
+              )}
+              {(restoreReport.errors || []).length === 0 && (
+                <div className="success" style={{ marginTop: 8 }}>All records valid — safe to apply.</div>
+              )}
+              <div className="row" style={{ marginTop: 10 }}>
+                <label>Mode <select value={restoreMode} onChange={(e) => setRestoreMode(e.target.value)}>
+                  <option value="merge">Merge (keep mine, add new)</option>
+                  <option value="replace">Replace (wipe mine first)</option>
+                </select></label>
+              </div>
+              {restoreMode === 'replace' && (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+                  Type REPLACE ALL MY DATA
+                  <input className="input" value={restorePhrase} onChange={(e) => setRestorePhrase(e.target.value)} placeholder="REPLACE ALL MY DATA" />
+                </label>
+              )}
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="btn primary" disabled={busyBackup} onClick={applyRestore}>
+                  {busyBackup ? 'Restoring…' : `Apply restore (${restoreMode})`}
+                </button>
+              </div>
+            </div>
+          )}
+          <h4>Import / export history</h4>
+          {history.length === 0 ? <p className="muted small">No backup, restore or import activity recorded yet.</p> : (
+            <ul className="legend">{history.slice(0, 10).map((h) => (
+              <li key={h.id}><span>{h.at.slice(0, 16).replace('T', ' ')} · {h.action}{h.detail ? ` — ${h.detail}` : ''}</span></li>
+            ))}</ul>
+          )}
           {onNavigate && (
             <div className="row" style={{ marginTop: 8 }}>
               <button className="btn" onClick={() => onNavigate('security')}>🛡️ Open Security &amp; Privacy →</button>

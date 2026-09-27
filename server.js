@@ -447,7 +447,20 @@ function buildTx(userId, b, existing) {
 }
 
 // ── Middleware ──
-app.use(express.json({ limit: '2mb' }));
+// 8 MB so versioned backups (up to BACKUP_MAX_TRANSACTIONS rows) survive the
+// JSON parser; portability routes additionally enforce BACKUP_MAX_BYTES with
+// a clear 413. Note: Vercel caps serverless bodies at ~4.5 MB — larger
+// restores must run against a local server (documented in README).
+app.use(express.json({ limit: '8mb' }));
+app.use((err, req, res, next) => {
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    return res.status(413).json({ error: 'Request body too large (max 8 MB). For big restores, run the server locally with `npm start`.' });
+  }
+  if (err && err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Malformed JSON body.' });
+  }
+  next(err);
+});
 
 // ── Auth API ──
 app.post('/api/auth/signup', async (req, res) => {
@@ -1347,8 +1360,9 @@ import {
   idempotencyKey
 } from './src/services/autopilotEngine.js';
 import {
-  BACKUP_FORMAT, BACKUP_VERSION, normalizeBackup, validateBackupData,
-  summarizeBackup, buildAccountCsv, RESTORE_REPLACE_PHRASE
+  BACKUP_FORMAT, BACKUP_VERSION, BACKUP_APP_VERSION, BACKUP_MAX_BYTES, normalizeBackup, validateBackupData,
+  summarizeBackup, buildAccountCsv, buildManifest, verifyManifest, diffPreview,
+  RESTORE_REPLACE_PHRASE
 } from './src/services/portability.js';
 
 const RUNS_CAP = 500;
@@ -1685,7 +1699,452 @@ app.get('/api/export', authMiddleware, async (req, res) => {
   });
 });
 
-app.delete('/api/account/data', authMiddleware, async (req, res) => {  const id = req.user.id;
+// ── Portability: versioned backup, restore (dry-run), per-account CSV ──
+const PORTABILITY_ACTIONS = new Set(['export', 'import', 'restore', 'wipe_data']);
+
+// Full versioned backup. Unlike legacy /api/export this keeps RAW account
+// rows (opening balances) and contributions, so a restore is lossless.
+// Exportable collections are an explicit allowlist — users, sessions,
+// resets, securityEvents and audit are never serialized.
+app.get('/api/portability/backup', authMiddleware, async (req, res) => {
+  const id = req.user.id;
+  const rawAccounts = db.accounts.filter((a) => a.userId === id);
+  const budgets = {};
+  for (const b of db.budgets.filter((x) => x.userId === id)) budgets[b.category] = b.amount;
+  const stripUser = (r) => {
+    const { userId, ...rest } = r || {};
+    return rest;
+  };
+  const data = {
+    transactions: db.transactions.filter((t) => t.userId === id).map(toClientTx),
+    budgets,
+    accounts: rawAccounts.map((a) => ({
+      id: a.id, name: a.name, type: a.type, institution: a.institution || '',
+      openingBalance: toRupees(a.openingPaise || 0), status: a.status || 'active',
+      createdAt: a.createdAt, updatedAt: a.updatedAt
+    })),
+    categories: db.categories.filter((c) => c.userId === id).map(stripUser),
+    upiIds: db.upiIds.filter((u) => u.userId === id).map((u) => ({
+      id: u.id, upiId: u.upiId, accountId: u.accountId || null, createdAt: u.createdAt
+    })),
+    goals: db.goals.filter((g) => g.userId === id).map((g) => ({
+      id: g.id, name: g.name, target: toRupees(g.targetPaise || 0),
+      current: toRupees(g.currentPaise || 0), targetDate: g.targetDate || null,
+      notes: g.notes || '', linkedAccount: g.linkedAccount || null,
+      linkedCategory: g.linkedCategory || null, status: g.status || 'active',
+      createdAt: g.createdAt, updatedAt: g.updatedAt
+    })),
+    contributions: db.contributions.filter((c) => c.userId === id).map((c) => ({
+      id: c.id, goalId: c.goalId, amount: toRupees(c.amountPaise || 0),
+      date: c.date, account: c.account || null, note: c.note || '', createdAt: c.createdAt
+    })),
+    recurring: db.recurring.filter((r) => r.userId === id).map((r) => ({
+      id: r.id, name: r.name, amount: toRupees(r.amountPaise || 0), type: r.type,
+      frequency: r.frequency, account: r.account || null, category: r.category || null,
+      startDate: r.startDate, endDate: r.endDate || null, status: r.status || 'active',
+      autoCreate: r.autoCreate !== false, createdAt: r.createdAt, updatedAt: r.updatedAt
+    })),
+    imports: db.imports.filter((x) => x.userId === id).map((x) => ({
+      key: x.key, rowCount: x.rowCount || 0, createdAt: x.createdAt
+    })),
+    autopilotRules: db.autopilotRules.filter((r) => r.userId === id).map(stripUser),
+    autopilotRuns: db.autopilotRuns.filter((r) => r.userId === id).map((r) => ({
+      id: r.id, ruleId: r.ruleId, trigger: r.trigger, key: r.key,
+      decision: r.decision, detail: r.detail, at: r.at
+    })),
+    notifications: db.notifications.filter((n) => n.userId === id).map((n) => ({
+      id: n.id, kind: n.kind, title: n.title, body: n.body,
+      payload: n.payload || null, ruleId: n.ruleId || null,
+      status: n.status || 'unread', createdAt: n.createdAt
+    })),
+    preferences: (() => {
+      const p = db.preferences.find((x) => x.userId === id) || {};
+      return {
+        theme: p.theme, currency: p.currency, timezone: p.timezone,
+        fyStartMonth: p.fyStartMonth, avatar: p.avatar || undefined,
+        displayName: p.displayName || undefined
+      };
+    })()
+  };
+  const manifest = buildManifest(data, { appVersion: BACKUP_APP_VERSION });
+  audit(req.user.id, 'export', 'backup', null, `versioned backup downloaded (${manifest.integrity.value.slice(0, 12)}…)`);
+  await save();
+  const body = {
+    format: BACKUP_FORMAT, version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    // Minimal owner reference, used only to validate ownership on restore.
+    user: { id: req.user.id },
+    manifest,
+    data
+  };
+  if (req.query.download === '1') {
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="fintrack-backup-v${BACKUP_VERSION}-${stamp}.json"`);
+  }
+  res.json(body);
+});
+
+// CSV export scoped to one account (matches its ledger rows from any side).
+app.get('/api/portability/export.csv', authMiddleware, async (req, res) => {
+  const name = String(req.query.account || '').trim();
+  if (!name) return res.status(400).json({ error: 'account query parameter is required' });
+  const mine = db.accounts.filter((a) => a.userId === req.user.id);
+  const acc = mine.find((a) => a.name.toLowerCase() === name.toLowerCase());
+  if (!acc) return res.status(404).json({ error: 'Account not found' });
+  const rows = db.transactions
+    .filter((t) => t.userId === req.user.id &&
+      (t.account === acc.name || t.accountFrom === acc.name || t.accountTo === acc.name))
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    .map(toClientTx);
+  audit(req.user.id, 'export', 'account_csv', acc.id, `${acc.name} (${rows.length} rows)`);
+  await save();
+  const safe = acc.name.replace(/[^\w\-]+/g, '_').slice(0, 60) || 'account';
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="fintrack-${safe}-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(buildAccountCsv(rows));
+});
+
+// Import/export/restore/wipe audit trail for this user.
+app.get('/api/portability/history', authMiddleware, async (req, res) => {
+  const rows = db.audit.filter((a) => a.userId === req.user.id && PORTABILITY_ACTIONS.has(a.action))
+    .sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 100);
+  res.json({ history: rows });
+});
+
+// Collections a replace-mode restore wipes (caller's rows only). Authentication,
+// sessions, password-reset codes are handled separately; securityEvents are
+// deliberately PRESERVED so a restore can never erase the security history.
+const WIPEABLE_KEYS = ['transactions', 'budgets', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'resets', 'autopilotRules', 'autopilotRuns', 'notifications', 'imports'];
+
+// Generic in-memory operation limiter (per Vercel instance; counts reset on
+// cold start — documented in README, not a distributed guarantee).
+const opAttempts = new Map();
+function opLimited(key, max, windowMs) {
+  const now = Date.now();
+  const arr = (opAttempts.get(key) || []).filter((t) => now - t < windowMs);
+  arr.push(now);
+  opAttempts.set(key, arr);
+  return arr.length > max;
+}
+const portabilityLimited = (req, action, max, windowMs) =>
+  opLimited(`port:${action}:${req.user.id}:${req.ip}`, max, windowMs);
+
+// Live per-user slices shaped for diffPreview (balances use paise math).
+function liveUserSlices(userId) {
+  const budgets = {};
+  for (const b of db.budgets.filter((x) => x.userId === userId)) budgets[b.category] = b.amount;
+  return {
+    transactions: db.transactions.filter((t) => t.userId === userId),
+    accounts: db.accounts.filter((a) => a.userId === userId),
+    categories: db.categories.filter((c) => c.userId === userId),
+    upiIds: db.upiIds.filter((u) => u.userId === userId),
+    goals: db.goals.filter((g) => g.userId === userId),
+    contributions: db.contributions.filter((c) => c.userId === userId),
+    recurring: db.recurring.filter((r) => r.userId === userId),
+    imports: db.imports.filter((x) => x.userId === userId),
+    autopilotRules: db.autopilotRules.filter((r) => r.userId === userId),
+    autopilotRuns: db.autopilotRuns.filter((r) => r.userId === userId),
+    notifications: db.notifications.filter((n) => n.userId === userId),
+    budgets
+  };
+}
+
+// Shared normalize → validate pipeline for validate/preview/restore.
+// Pure reads only; never writes, never audits.
+function prepareBackup(req) {
+  const { backup } = req.body || {};
+  if (backup !== undefined) {
+    try {
+      if (Buffer.byteLength(JSON.stringify(backup), 'utf8') > BACKUP_MAX_BYTES) {
+        return { error: { status: 413, body: { error: `Backup too large (max ${BACKUP_MAX_BYTES / 1048576} MB)` } } };
+      }
+    } catch { /* fall through to normalize error */ }
+  }
+  const norm = normalizeBackup(backup);
+  if (!norm.ok) return { error: { status: 400, body: { error: norm.errors.join('; ') } } };
+  const knownAccounts = db.accounts.filter((a) => a.userId === req.user.id);
+  const report = validateBackupData(norm.data, { ownerId: req.user.id, knownAccounts });
+  const counts = summarizeBackup(norm.data);
+  return { norm, report, counts };
+}
+
+function insertBackupRecord(userId, key, r, existingIds, now) {
+  // Returns 'inserted' | 'skipped' | {error}. Ownership is always forced to
+  // the caller; incoming ids are kept only when collision-free.
+  const keepId = (prefix) => {
+    const id = (typeof r.id === 'string' && r.id) ? r.id : uid(prefix);
+    if (existingIds.has(id)) return null;
+    existingIds.add(id);
+    return id;
+  };
+  let row = null;
+  if (key === 'transactions') {
+    const id = keepId('T'); if (!id) return 'skipped';
+    row = { ...buildTx(userId, { ...r, source: r.source || 'restored' }), id };
+  } else if (key === 'accounts') {
+    const id = keepId('ac_'); if (!id) return 'skipped';
+    row = {
+      id, userId, name: String(r.name).trim(), type: r.type,
+      institution: String(r.institution || '').trim(),
+      openingPaise: toPaise(Number(r.openingBalance) || 0),
+      status: r.status || 'active', createdAt: r.createdAt || now, updatedAt: now
+    };
+  } else if (key === 'categories') {
+    const id = keepId('c_'); if (!id) return 'skipped';
+    row = {
+      id, userId, name: String(r.name).trim(), kind: r.kind || 'expense',
+      color: r.color || '#3b82f6', icon: String(r.icon || '').slice(0, 4),
+      parent: r.parent || null, createdAt: r.createdAt || now
+    };
+  } else if (key === 'upiIds') {
+    const id = keepId('upi_'); if (!id) return 'skipped';
+    row = {
+      id, userId, upiId: String(r.upiId).trim(), accountId: r.accountId || null,
+      createdAt: r.createdAt || now
+    };
+  } else if (key === 'goals') {
+    const id = keepId('g_'); if (!id) return 'skipped';
+    row = {
+      id, userId, name: String(r.name).trim(), targetPaise: toPaise(r.target),
+      currentPaise: toPaise(Number(r.current) || 0),
+      targetDate: r.targetDate || null, notes: String(r.notes || '').slice(0, 500),
+      linkedAccount: r.linkedAccount || null, linkedCategory: r.linkedCategory || null,
+      status: ['active', 'paused', 'completed'].includes(r.status) ? r.status : 'active',
+      createdAt: r.createdAt || now, updatedAt: now
+    };
+  } else if (key === 'contributions') {
+    const id = keepId('gc_'); if (!id) return 'skipped';
+    row = {
+      id, userId, goalId: r.goalId || null, amountPaise: toPaise(r.amount),
+      date: r.date, account: r.account || null,
+      note: String(r.note || '').slice(0, 300), createdAt: r.createdAt || now
+    };
+  } else if (key === 'recurring') {
+    const id = keepId('r_'); if (!id) return 'skipped';
+    row = {
+      id, userId, name: String(r.name).trim(), amountPaise: toPaise(r.amount),
+      type: r.type, frequency: r.frequency, account: r.account || null,
+      category: r.category || null, startDate: r.startDate, endDate: r.endDate || null,
+      nextDate: r.startDate, status: 'active', autoCreate: r.autoCreate !== false,
+      lastPostedDate: null, lastRunAt: null, createdAt: r.createdAt || now, updatedAt: now
+    };
+  } else if (key === 'autopilotRules') {
+    // Incoming rule ids are kept when collision-free so a repeated merge of
+    // the same backup skips instead of duplicating; always imported paused.
+    const id = keepId('ar_'); if (!id) return 'skipped';
+    row = {
+      id, userId, name: String(r.name).trim(), trigger: r.trigger,
+      conditions: r.conditions || [], actions: r.actions,
+      requireApproval: r.requireApproval !== false,
+      params: r.params || {}, status: 'paused',
+      runCount: 0, lastPostedDate: null, lastRunAt: null, createdAt: now, updatedAt: now
+    };
+  } else if (key === 'imports') {
+    const k = String(r.key || '').trim();
+    if (!k || existingIds.has(k)) return 'skipped';
+    existingIds.add(k);
+    row = { key: k, userId, createdAt: r.createdAt || now, rowCount: Number(r.rowCount) || 0 };
+  } else if (key === 'autopilotRuns') {
+    const id = keepId('aru_'); if (!id) return 'skipped';
+    row = {
+      id, userId, ruleId: r.ruleId || null, trigger: r.trigger || null,
+      key: r.key || null, decision: r.decision || null,
+      detail: String(r.detail || '').slice(0, 300), at: r.at || now
+    };
+  } else if (key === 'notifications') {
+    const id = keepId('nt_'); if (!id) return 'skipped';
+    row = {
+      id, userId, kind: r.kind || 'info',
+      title: String(r.title || '').slice(0, 120), body: String(r.body || '').slice(0, 1000),
+      payload: r.payload || null, ruleId: r.ruleId || null,
+      status: r.status === 'read' ? 'read' : 'unread', createdAt: r.createdAt || now
+    };
+  }
+  if (!row) return { error: 'unsupported collection' };
+  db[key].push(row);
+  return 'inserted';
+}
+
+// Server-side backup validator. Read-only: never writes, never audits, so
+// validation can never modify live financial data.
+app.post('/api/portability/validate', authMiddleware, async (req, res) => {
+  if (portabilityLimited(req, 'validate', 20, 5 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many validations — try again in a few minutes' });
+  }
+  const prep = prepareBackup(req);
+  if (prep.error) return res.status(prep.error.status).json(prep.error.body);
+  const { norm, report, counts } = prep;
+  const manifestCheck = req.body.backup && req.body.backup.manifest
+    ? verifyManifest(req.body.backup.data || norm.data, req.body.backup.manifest)
+    : { ok: true, skipped: true };
+  const totalInvalid = Object.values(report.invalid).reduce((s, n) => s + n, 0);
+  res.json({
+    ok: true,
+    valid: totalInvalid === 0,
+    format: BACKUP_FORMAT,
+    version: BACKUP_VERSION,
+    counts,
+    validCounts: report.valid,
+    invalidCounts: report.invalid,
+    errors: report.errors,
+    warnings: report.warnings,
+    dangling: report.dangling,
+    manifest: manifestCheck,
+    compatibility: {
+      supported: `fintrack-backup v${BACKUP_VERSION}`,
+      appVersion: BACKUP_APP_VERSION,
+      notes: [
+        'Legacy /api/export payloads are accepted and normalized (budgets folded, account shells get 0 opening).',
+        'Unknown fields are ignored with warnings; record ids are preserved when collision-free.',
+        'Restores larger than ~4.5 MB must run against a local server — Vercel caps serverless request bodies.'
+      ]
+    }
+  });
+});
+
+// Restore preview. Read-only: compares the incoming backup against live data
+// (added / replaced / removed / conflicts + balance effect) without writing.
+app.post('/api/portability/preview', authMiddleware, async (req, res) => {
+  if (portabilityLimited(req, 'preview', 20, 5 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many previews — try again in a few minutes' });
+  }
+  const { mode } = req.body || {};
+  const previewMode = mode || 'merge';
+  if (!['merge', 'replace'].includes(previewMode)) {
+    return res.status(400).json({ error: 'mode must be merge | replace' });
+  }
+  const prep = prepareBackup(req);
+  if (prep.error) return res.status(prep.error.status).json(prep.error.body);
+  const { norm, report, counts } = prep;
+  const live = liveUserSlices(req.user.id);
+  const liveCounts = summarizeBackup({ ...live, preferences: {} });
+  liveCounts.budgets = Object.keys(live.budgets).length;
+  const diff = diffPreview(
+    { ...live, transactions: live.transactions.map((t) => ({ ...t, amount: undefined })) },
+    norm.data, previewMode
+  );
+  const totalInvalid = Object.values(report.invalid).reduce((s, n) => s + n, 0);
+  res.json({
+    ok: true, mode: previewMode,
+    liveCounts, incomingCounts: counts,
+    diff: diff.per,
+    balanceEffect: diff.balanceEffect,
+    invalidSkipped: totalInvalid,
+    errors: report.errors.slice(0, 10),
+    warnings: report.warnings.slice(0, 20),
+    dangling: report.dangling.slice(0, 20),
+    replaceWipeNote: previewMode === 'replace'
+      ? 'Replace wipes your transactions, budgets, accounts, categories, UPI IDs, goals, contributions, recurring rules, imports, autopilot rules/runs and notifications. Your login, sessions, security history and account identity are preserved.'
+      : null
+  });
+});
+
+app.post('/api/portability/restore', authMiddleware, async (req, res) => {
+  if (portabilityLimited(req, 'restore', 5, 60 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many restores — try again later' });
+  }
+  const { dryRun, mode, confirmation, password } = req.body || {};
+  const prep = prepareBackup(req);
+  if (prep.error) return res.status(prep.error.status).json(prep.error.body);
+  const { norm, report, counts } = prep;
+  const totalInvalid = Object.values(report.invalid).reduce((s, n) => s + n, 0);
+  if (dryRun) {
+    return res.json({ ok: true, dryRun: true, counts, valid: report.valid, invalid: report.invalid, errors: report.errors, warnings: report.warnings });
+  }
+  const restoreMode = mode || 'merge';
+  if (!['merge', 'replace'].includes(restoreMode)) {
+    return res.status(400).json({ error: "mode must be merge | replace" });
+  }
+  if (restoreMode === 'replace') {
+    // Re-authentication (mirrors the account-deletion safeguard): the current
+    // password plus the explicit confirmation phrase are both required.
+    if (!password || !verifyPassword(req.user, String(password))) {
+      secEvent(req.user.id, 'restore_failed', 'Replace attempted with wrong password');
+      await save();
+      return res.status(401).json({ error: 'Password is incorrect' });
+    }
+    if (confirmation !== RESTORE_REPLACE_PHRASE) {
+      secEvent(req.user.id, 'restore_failed', 'Replace attempted without the confirmation phrase');
+      await save();
+      return res.status(400).json({ error: `Type ${RESTORE_REPLACE_PHRASE} to confirm a full replace` });
+    }
+    if (totalInvalid > 0) {
+      return res.status(400).json({ error: `Replace aborted: ${totalInvalid} invalid record(s)`, errors: report.errors });
+    }
+    const beforeCounts = summarizeBackup({ ...liveUserSlices(req.user.id), preferences: {} });
+    for (const k of WIPEABLE_KEYS) db[k] = db[k].filter((x) => x.userId !== req.user.id);
+    ensureUserDefaults(req.user);
+    audit(req.user.id, 'restore', 'pre_replace_snapshot', null, `wiped=${JSON.stringify(beforeCounts)}`);
+  }
+  const now = new Date().toISOString();
+  const inserted = {}, skipped = {}, conflictIds = {};
+  const existingIds = new Set();
+  for (const k of ['transactions', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'autopilotRuns', 'notifications']) {
+    for (const t of db[k].filter((x) => x.userId === req.user.id)) existingIds.add(t.id);
+  }
+  for (const x of db.imports.filter((x) => x.userId === req.user.id)) existingIds.add(x.key);
+  const hasError = (key, i) => report.errors.some((e) => e.startsWith(`${key}[${i}]`));
+  const MERGEABLE = ['transactions', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'imports', 'autopilotRules', 'autopilotRuns', 'notifications'];
+  for (const key of MERGEABLE) {
+    const list = norm.data[key] || [];
+    for (let i = 0; i < list.length; i++) {
+      if (hasError(key, i)) {
+        skipped[key] = (skipped[key] || 0) + 1;
+        continue;
+      }
+      const incomingId = (list[i] && (list[i].id || list[i].key)) || null;
+      const out = insertBackupRecord(req.user.id, key, list[i], existingIds, now);
+      if (out === 'inserted') inserted[key] = (inserted[key] || 0) + 1;
+      else {
+        skipped[key] = (skipped[key] || 0) + 1;
+        if (incomingId) {
+          conflictIds[key] = conflictIds[key] || [];
+          if (conflictIds[key].length < 20) conflictIds[key].push(incomingId);
+        }
+      }
+    }
+  }
+  // Budgets merge per category; preferences merge field-by-field.
+  let bUp = 0;
+  for (const [cat, amt] of Object.entries(norm.data.budgets || {})) {
+    if (!cat || !Number.isFinite(Number(amt)) || Number(amt) < 0) continue;
+    const ex = db.budgets.find((x) => x.userId === req.user.id && x.category === cat);
+    if (ex) ex.amount = Number(amt);
+    else db.budgets.push({ userId: req.user.id, category: cat, amount: Number(amt) });
+    bUp++;
+  }
+  inserted.budgets = bUp;
+  const p = norm.data.preferences || {};
+  if (Object.keys(p).length) {
+    let pref = db.preferences.find((x) => x.userId === req.user.id);
+    if (!pref) { pref = { userId: req.user.id }; db.preferences.push(pref); }
+    if (['light', 'dark'].includes(p.theme)) pref.theme = p.theme;
+    if (p.currency) pref.currency = String(p.currency).slice(0, 8);
+    if (p.timezone) pref.timezone = String(p.timezone).slice(0, 64);
+    if (Number(p.fyStartMonth) >= 1 && Number(p.fyStartMonth) <= 12) pref.fyStartMonth = Number(p.fyStartMonth);
+    pref.updatedAt = now;
+    inserted.preferences = 1;
+  }
+  audit(req.user.id, 'restore', 'backup', null, `${restoreMode} inserted=${JSON.stringify(inserted)}`);
+  await save();
+  // Post-restore verification: counts + referential sanity, recomputed live
+  // (derived balances are never trusted from the backup — they rebuild from
+  // the ledger on every read).
+  const after = liveUserSlices(req.user.id);
+  const afterCounts = summarizeBackup({ ...after, preferences: {} });
+  afterCounts.budgets = Object.keys(after.budgets).length;
+  res.json({
+    ok: true, mode: restoreMode, counts, inserted, skipped,
+    conflicts: conflictIds,
+    afterCounts,
+    errors: report.errors.slice(0, 10),
+    warnings: report.warnings.slice(0, 10)
+  });
+});
+
+app.delete('/api/account/data', authMiddleware, async (req, res) => {
+  const id = req.user.id;
   for (const k of ['transactions', 'budgets', 'accounts', 'categories', 'upiIds', 'goals', 'contributions', 'recurring', 'resets', 'autopilotRules', 'autopilotRuns', 'notifications', 'securityEvents', 'imports']) {
     db[k] = db[k].filter((x) => x.userId !== id);
   }

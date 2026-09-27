@@ -113,6 +113,15 @@ export const api = {
   exportAll: () => request('/api/export'),
   wipeData: () => request('/api/account/data', { method: 'DELETE' }),
 
+  downloadBackup: () => request('/api/portability/backup'),
+  validatePortability: (backup) =>
+    request('/api/portability/validate', { method: 'POST', body: JSON.stringify({ backup }) }),
+  previewPortability: (backup, mode) =>
+    request('/api/portability/preview', { method: 'POST', body: JSON.stringify({ backup, mode }) }),
+  restoreBackup: (backup, opts = {}) =>
+    request('/api/portability/restore', { method: 'POST', body: JSON.stringify({ backup, ...opts }) }),
+  getPortabilityHistory: async () => (await request('/api/portability/history')).history,
+
   getSecuritySessions: async () => (await request('/api/security/sessions')).sessions,
   revokeSecuritySession: (id) => request(`/api/security/sessions/${id}/revoke`, { method: 'POST' }),
   revokeOtherSessions: () => request('/api/security/sessions/revoke-others', { method: 'POST' }),
