@@ -27,7 +27,10 @@ const DetectivePage = lazy(() => import('./components/DetectivePage.jsx'));
 const HeatmapPage = lazy(() => import('./components/HeatmapPage.jsx'));
 const PurchaseLabPage = lazy(() => import('./components/PurchaseLabPage.jsx'));
 const AnalystPage = lazy(() => import('./components/AnalystPage.jsx'));
+const ExtrasHub = lazy(() => import('./components/ExtrasHub.jsx'));
 const SubscriptionsPage = lazy(() => import('./components/SubscriptionsPage.jsx'));
+const SmsInboxPage = lazy(() => import('./components/SmsInboxPage.jsx'));
+const VaultPage = lazy(() => import('./components/VaultPage.jsx'));
 const AccuracyPage = lazy(() => import('./components/AccuracyPage.jsx'));
 const MilestonesPage = lazy(() => import('./components/MilestonesPage.jsx'));
 const AdvancedAnalyticsPage = lazy(() => import('./components/AdvancedAnalyticsPage.jsx'));
@@ -41,6 +44,7 @@ import Celebration from './components/Celebration.jsx';
 import Assistant from './components/Assistant.jsx';
 import Login from './components/Login.jsx';
 import { api, clearToken, getToken, getTheme, toggleBankTheme } from './services/api.js';
+import EnvToggle, { EnvBanner } from './components/EnvToggle.jsx';
 
 const NAV = [
   { section: 'Home' },
@@ -65,6 +69,7 @@ const NAV = [
   { id: 'detective', label: 'Detective', ico: '🕵️' },
   { id: 'accuracy', label: 'Accuracy', ico: '🔎' },
   { id: 'analyst', label: 'AI Analyst', ico: '🤖' },
+  { id: 'extras', label: 'More Features', ico: '🧩' },
   { id: 'tips', label: 'Tips & Suggestions', ico: '💡' },
   { id: 'learn', label: 'Learn & Tools', ico: '📚' },
   { section: 'Manage' },
@@ -72,8 +77,10 @@ const NAV = [
   { id: 'assetsdebt', label: 'Assets & Debt', ico: '⚖️' },
   { id: 'categories', label: 'Categories', ico: '🏷️' },
   { id: 'upi', label: 'UPI', ico: '📱' },
+  { id: 'sms', label: 'SMS Inbox & Updates', ico: '📩' },
   { id: 'subs', label: 'Subscriptions', ico: '📡' },
   { id: 'security', label: 'Security & Privacy', ico: '🛡️' },
+  { id: 'vault', label: 'Private Vault', ico: '🔐' },
   { id: 'portability', label: 'Data Portability', ico: '💾' },
   { id: 'settings', label: 'Settings', ico: '⚙️' }
 ];
@@ -86,6 +93,7 @@ const TITLES = {
   heatmap: ['Spending Heatmap', 'Daily calendar, weekday stats, day timeline.'],
   purchaselab: ['Purchase Lab', 'Buy today vs next month vs save 3 months.'],
   analyst: ['AI Analyst', 'Cited answers from your ledger — says when data is incomplete.'],
+  extras: ['More Features', '20 extras: bills, splits, holdings, tax, FIRE, receipts, PDF reports…'],
   subs: ['Subscriptions Radar', 'Detected renewals, totals, confirm/dismiss.'],
   accuracy: ['Accuracy Monitor', 'Statement vs ledger + monthly books-closed report.'],
   milestones: ['Milestones', 'Measurable targets with plan-vs-actual timeline.'],
@@ -97,6 +105,7 @@ const TITLES = {
   budgets: ['Budgets', 'Monthly limits with live utilization.'],
   categories: ['Categories', 'Editable hierarchy with real spending.'],
   upi: ['UPI', 'Saved UPI IDs and UPI transaction tracking.'],
+  sms: ['SMS Inbox & Updates', 'Bank SMS autodetect, PROD/UAT/TEST modes and auto-updates.'],
   goals: ['Savings Goals', 'Targets, contributions and progress.'],
   reports: ['Reports & Analytics', 'Interactive charts, comparisons and insights.'],
   recurring: ['Recurring Payments', 'Rent, SIPs & subscriptions auto-created on schedule.'],
@@ -106,6 +115,7 @@ const TITLES = {
   trends: ['Trends & Health', '6-month trends, movers and your financial health score.'],
   learn: ['Learn & Tools', 'Money guides plus SIP, tax, emergency and 50/30/20 tools.'],
   security: ['Security & Privacy', 'Sessions, activity, password and account deletion.'],
+  vault: ['Private Vault', 'PIN-encrypted on-device ledger — never synced anywhere.'],
   portability: ['Data Portability', 'Versioned backups, validation, restore preview and safe restore.'],
   settings: ['Settings', 'Profile, preferences, backup and privacy.'],
   mhome: ['Home', 'Your money at a glance.'],
@@ -151,10 +161,12 @@ export default function App() {
   };
 
   useEffect(() => {
-    const t = getTheme();
-    document.documentElement.setAttribute('data-theme', t);
+    document.documentElement.setAttribute('data-theme', getTheme());
   }, []);
 
+  // Env toggle: flipping PROD/UAT/TEST refreshes the cloud ledger so every
+  // page reflects the active environment. (TEST keeps cloud data cached;
+  // SMS + vault flows read their own sandboxes. Vault is always local.)
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -178,6 +190,12 @@ export default function App() {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    const onMode = () => { loadAll(); };
+    window.addEventListener('fintrack:mode-changed', onMode);
+    return () => window.removeEventListener('fintrack:mode-changed', onMode);
+  }, [loadAll]);
 
   useEffect(() => {
     (async () => {
@@ -267,22 +285,31 @@ export default function App() {
             <button className="btn menu-btn" onClick={() => setNavOpen(true)}>☰</button>
             <div><h1>{title}</h1><p className="sub">{sub}</p></div>
           </div>
-          {tab === 'transactions' && (
-            <button className="btn primary" onClick={() => setModalSignal((s) => s + 1)}>+ Add Transaction</button>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <EnvToggle />
+            {tab === 'transactions' && (
+              <button className="btn primary" onClick={() => setModalSignal((s) => s + 1)}>+ Add Transaction</button>
+            )}
+          </div>
         </div>
         <main className="main">
+          <EnvBanner />
           {error && <div className="card"><div className="error">{error}</div></div>}
           {loading && <div className="muted small">Loading your data…</div>}
           <Suspense fallback={<div className="card"><div className="muted">Loading page…</div></div>}>
           {tab === 'command' && <CommandCenterPage transactions={transactions} accounts={accounts} budgets={budgets} recurring={recurring} goals={goals} />}
           {tab === 'cashflow' && <CashflowPage transactions={transactions} accounts={accounts} recurring={recurring} />}
           {tab === 'buckets' && <BucketsPage />}
-          {tab === 'detective' && <DetectivePage transactions={transactions} recurring={recurring} onGoToTransactions={() => go('transactions')} />}
+          {tab === 'detective' && <DetectivePage transactions={transactions} recurring={recurring} onGoToTransactions={() => go('transactions')} onChanged={loadAll} />}
           {tab === 'heatmap' && <HeatmapPage transactions={transactions} />}
           {tab === 'purchaselab' && <PurchaseLabPage transactions={transactions} accounts={accounts} recurring={recurring} budgets={budgets} goals={goals} />}
           {tab === 'analyst' && <AnalystPage transactions={transactions} recurring={recurring} />}
+          {tab === 'extras' && (
+            <ExtrasHub user={user} transactions={transactions} budgets={budgets} accounts={accounts} onChanged={loadAll} go={go} />
+          )}
           {tab === 'subs' && <SubscriptionsPage transactions={transactions} />}
+          {tab === 'sms' && <SmsInboxPage onChanged={loadAll} />}
+          {tab === 'vault' && <VaultPage />}
           {tab === 'accuracy' && <AccuracyPage transactions={transactions} accounts={accounts} />}
           {tab === 'milestones' && <MilestonesPage transactions={transactions} accounts={accounts} budgets={budgets} goals={goals} />}
           {tab === 'advanced' && <AdvancedAnalyticsPage transactions={transactions} budgets={budgets} />}
