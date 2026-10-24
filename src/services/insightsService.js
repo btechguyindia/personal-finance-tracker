@@ -36,6 +36,18 @@ export function tipOfTheDay(dateISO) {
 }
 
 // ── 2. Personalized tips (ledger-driven) ──
+// Scope category stats to the requested month, not wall-clock "this-month",
+// so tips match the month the ledger was analyzed for (and stay testable).
+function monthRange(monthKey) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey || '')) return null;
+  const [y, m] = monthKey.split('-').map(Number);
+  const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  return { start: `${monthKey}-01`, end, label: `Month ${monthKey}`, preset: 'month' };
+}
+function scopedRange(monthKey) {
+  return monthRange(monthKey)
+    || (() => { try { return getDateRange('this-month'); } catch { return null; } })();
+}
 export function personalizedTips(transactions, monthKey) {
   const tips = [];
   if (!transactions || transactions.length === 0) {
@@ -44,7 +56,7 @@ export function personalizedTips(transactions, monthKey) {
       { icon: '🏦', title: 'Connect your routine', body: 'Import a bank statement to see where money actually goes in minutes.' },
     ];
   }
-  const range = (() => { try { return getDateRange('this-month'); } catch { return null; } })();
+  const range = scopedRange(monthKey);
   const byCat = range ? expenseByCategory(transactions, range, {}) : { rows: [], total: 0 };
   const m = monthTotals(transactions, monthKey);
   const food = byCat.rows.find((r) => r.category === 'Food');
@@ -77,7 +89,7 @@ export function smartSuggestions(transactions, budgets, recurring, monthKey) {
   if (!transactions || transactions.length === 0) {
     return [{ icon: '🚀', title: 'Import or add data', body: 'Suggestions appear once your ledger has transactions.', action: 'Import statement →' }];
   }
-  const range = (() => { try { return getDateRange('this-month'); } catch { return null; } })();
+  const range = scopedRange(monthKey);
   const byCat = range ? expenseByCategory(transactions, range, {}) : { rows: [], total: 0 };
   const top = byCat.rows[0];
   if (top && top.amount > 0) {
